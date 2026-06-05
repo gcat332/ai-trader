@@ -168,22 +168,42 @@ Combined strategy (Technical + ML): indicators compute features (RSI, MACD cross
 
 **FastAPI endpoints:**
 ```
-GET  /api/positions
-GET  /api/orders
-GET  /api/pnl
-GET  /api/strategies
+GET  /api/positions                          open positions
+GET  /api/orders                             current order status
+GET  /api/pnl                                P&L summary (daily/weekly/total)
+GET  /api/strategies                         registered strategies
 POST /api/strategies/{id}/start
 POST /api/strategies/{id}/stop
-POST /api/backtest/run
-GET  /api/backtest/{id}
-GET  /ws/feed          # WebSocket: real-time price + order updates
+POST /api/backtest/run                       trigger new backtest run
+GET  /api/backtest/{id}                      single backtest result
+GET  /api/trades/history                     real trade history (filter: symbol, strategy, date range)
+GET  /api/backtest/history                   all past backtest runs
+GET  /api/compare?strategy=X&from=Y&to=Z    real vs backtest comparison
+GET  /ws/feed                                WebSocket: real-time price + order updates
 ```
 
-**React frontend:**
+**React frontend — pages:**
+
+**Live Trading**
 - Equity curve chart + open positions overlay
 - Open orders table with P&L
 - Start/stop controls per strategy
-- Backtest page: select strategy + date range, view Sharpe, drawdown, trade log
+
+**Trade History**
+- Table of all past real trades, filterable by symbol, strategy, date range
+- Columns: timestamp, symbol, side, entry price, exit price, PnL, PnL%, hold duration
+- Equity curve for the selected period
+
+**Backtest**
+- Trigger new backtest: select strategy + symbol + date range
+- List of all past backtest runs with summary stats (Sharpe, max drawdown, win rate)
+- Drill into any run: full trade log + equity curve
+
+**Compare (Real vs Backtest)**
+- Select a strategy and date range
+- Overlay equity curve of live trading vs backtest on the same chart
+- Side-by-side stats table: Sharpe, max drawdown, win rate, avg PnL per trade
+- Helps identify strategy drift — when live performance diverges from backtest expectations
 
 ---
 
