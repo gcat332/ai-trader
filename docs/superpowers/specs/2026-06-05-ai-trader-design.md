@@ -40,9 +40,15 @@ ai-trader/
 ├── dashboard/             # React frontend
 ├── data/
 │   └── fetcher.py         # OHLCV, order book data fetching (ccxt)
-└── specs/
-    ├── binance-mainnet.yaml
-    └── binance-testnet.yaml
+├── specs/
+│   ├── binance-mainnet.yaml
+│   └── binance-testnet.yaml
+├── db/
+│   └── trades.db              # SQLite (local), swap to PostgreSQL in prod
+├── backtest_results/          # CSV exports per backtest run
+└── logs/
+    ├── trading.log            # structured JSON app log
+    └── backtest.log           # backtest run log
 ```
 
 ### Data Flow
@@ -198,6 +204,45 @@ GET  /ws/feed          # WebSocket: real-time price + order updates
 /pnl        — today's P&L summary
 /close BTC  — close BTC position immediately
 ```
+
+---
+
+## Storage & Logging
+
+### Trade Database (SQLite → PostgreSQL)
+
+Structured trade data lives in a database for queryability (e.g. "P&L for BTC last month").
+
+| Table | Contents |
+|---|---|
+| `orders` | Every order sent to exchange — id, symbol, side, type, quantity, price, status, timestamps |
+| `positions` | Open and closed positions — entry/exit price, realized PnL, mode (SPOT/FUTURES) |
+| `signals` | Every signal emitted by strategy — side, entry, TP, SL, confidence, strategy_id |
+| `backtest_runs` | Backtest metadata — strategy, date range, config, summary stats |
+
+SQLite for local development. Swap connection string to PostgreSQL for production deployment — no code changes needed.
+
+### Backtest Results (CSV export)
+
+Each backtest run exports a CSV alongside the database record, for analysis in pandas or Excel.
+
+```
+backtest_results/
+└── {strategy_id}_{symbol}_{date_range}.csv
+    # columns: timestamp, side, entry, exit, pnl, pnl_pct, hold_duration
+```
+
+### Application Logs (File)
+
+Structured JSON logs written by `notifier/logger.py`:
+
+```
+logs/
+├── trading.log    # INFO/WARNING/ERROR from live trading engine
+└── backtest.log   # logs from backtest runs
+```
+
+Log entries include: timestamp, level, module, message, and relevant context (symbol, order_id, strategy_id). Log rotation at 10 MB, keeping last 7 files.
 
 ---
 
