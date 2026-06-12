@@ -17,6 +17,7 @@
 | `strategy/indicators/__init__.py` | Package marker |
 | `strategy/indicators/rsi.py` | RSI calculation (wraps pandas-ta) |
 | `strategy/indicators/macd.py` | MACD calculation (wraps pandas-ta) |
+| `strategy/indicators/adx.py` | ADX regime filter — suppress signals in sideways/choppy markets |
 | `strategy/ml/__init__.py` | Package marker |
 | `strategy/ml/base_model.py` | Abstract `MLModel` interface |
 | `strategy/ml/dummy_model.py` | Fixed-confidence stub for testing |
@@ -221,7 +222,96 @@ git commit -m "feat: MACD indicator"
 
 ---
 
-## Task 3: ML Model Interface & Dummy Implementation
+## Task 3: ADX Indicator (Regime Filter)
+
+**Files:**
+- Create: `strategy/indicators/adx.py`
+- Modify: `tests/test_indicators.py` (append tests)
+
+- [ ] **Step 1: Append failing ADX tests to `tests/test_indicators.py`**
+
+```python
+# Append to tests/test_indicators.py
+from strategy.indicators.adx import compute_adx
+
+
+def test_adx_length_matches_input():
+    n = 60
+    high  = pd.Series([float(100 + i % 5) for i in range(n)])
+    low   = pd.Series([float(98  + i % 5) for i in range(n)])
+    close = pd.Series([float(99  + i % 5) for i in range(n)])
+    result = compute_adx(high, low, close, period=14)
+    assert len(result) == n
+
+
+def test_adx_values_non_negative():
+    n = 60
+    high  = pd.Series([float(100 + i) for i in range(n)])
+    low   = pd.Series([float(98  + i) for i in range(n)])
+    close = pd.Series([float(99  + i) for i in range(n)])
+    result = compute_adx(high, low, close, period=14)
+    valid = result.dropna()
+    assert (valid >= 0).all()
+
+
+def test_adx_trending_market_above_threshold():
+    n = 60
+    high  = pd.Series([float(100 + i * 2)     for i in range(n)])
+    low   = pd.Series([float(100 + i * 2 - 1) for i in range(n)])
+    close = pd.Series([float(100 + i * 2)     for i in range(n)])
+    result = compute_adx(high, low, close, period=14)
+    assert result.iloc[-1] > 20
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+pytest tests/test_indicators.py::test_adx_length_matches_input -v
+```
+
+Expected: `ModuleNotFoundError: No module named 'strategy.indicators.adx'`
+
+- [ ] **Step 3: Implement `strategy/indicators/adx.py`**
+
+```python
+# strategy/indicators/adx.py
+import pandas as pd
+import pandas_ta as ta
+
+
+def compute_adx(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    period: int = 14,
+) -> pd.Series:
+    """Returns ADX series. Values < 20 = sideways market (suppress signals)."""
+    result = ta.adx(high, low, close, length=period)
+    nan_series = pd.Series([float("nan")] * len(close))
+    if result is None:
+        return nan_series
+    col = f"ADX_{period}"
+    return result[col] if col in result.columns else nan_series
+```
+
+- [ ] **Step 4: Run full indicator tests**
+
+```bash
+pytest tests/test_indicators.py -v
+```
+
+Expected: all PASSED (original 7 + 3 new ADX = 10 PASSED)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add strategy/indicators/adx.py tests/test_indicators.py
+git commit -m "feat: ADX indicator for market regime detection"
+```
+
+---
+
+## Task 4: ML Model Interface & Dummy Implementation
 
 **Files:**
 - Create: `strategy/ml/__init__.py`
@@ -321,7 +411,7 @@ git commit -m "feat: MLModel interface and DummyModel stub"
 
 ---
 
-## Task 4: RSI+MACD Combined Strategy
+## Task 5: RSI+MACD Combined Strategy
 
 **Files:**
 - Create: `strategy/rsi_macd.py`
@@ -445,6 +535,7 @@ from core.models import Signal
 from strategy.base import BaseStrategy
 from strategy.indicators.rsi import compute_rsi
 from strategy.indicators.macd import compute_macd
+from strategy.indicators.adx import compute_adx
 from strategy.ml.base_model import MLModel
 
 
@@ -459,6 +550,7 @@ class RsiMacdStrategy(BaseStrategy):
         confidence_threshold: float = 0.6,
         tp_pct: float = 0.03,
         sl_pct: float = 0.02,
+        adx_trend_threshold: float = 20.0,
     ):
         self._model = ml_model
         self._rsi_period = rsi_period
@@ -467,6 +559,7 @@ class RsiMacdStrategy(BaseStrategy):
         self._confidence_threshold = confidence_threshold
         self._tp_pct = tp_pct
         self._sl_pct = sl_pct
+        self._adx_threshold = adx_trend_threshold
 
     def on_candle(self, symbol: str, ohlcv: pd.DataFrame) -> Signal:
         close = ohlcv["close"]
@@ -474,9 +567,14 @@ class RsiMacdStrategy(BaseStrategy):
 
         rsi = compute_rsi(close, period=self._rsi_period)
         macd_line, signal_line, _ = compute_macd(close)
+        adx = compute_adx(ohlcv["high"], ohlcv["low"], close)
 
         # Need at least 2 valid MACD values to detect a crossover
         if rsi.isna().iloc[-1] or macd_line.isna().iloc[-2:].any():
+            return self._hold(symbol, entry_price)
+
+        # ADX regime filter — suppress signals in sideways/choppy markets
+        if not adx.isna().iloc[-1] and float(adx.iloc[-1]) < self._adx_threshold:
             return self._hold(symbol, entry_price)
 
         current_rsi = float(rsi.iloc[-1])
@@ -493,6 +591,7 @@ class RsiMacdStrategy(BaseStrategy):
             "rsi": current_rsi,
             "macd": float(macd_line.iloc[-1]),
             "macd_signal": float(signal_line.iloc[-1]),
+            "adx": float(adx.iloc[-1]) if not adx.isna().iloc[-1] else 0.0,
         })
         confidence = self._model.predict(features)
 
@@ -558,7 +657,7 @@ git commit -m "feat: RsiMacdStrategy combining RSI, MACD crossover, and ML confi
 
 ---
 
-## Task 5: Risk Manager
+## Task 6: Risk Manager
 
 **Files:**
 - Create: `risk/manager.py`
@@ -658,6 +757,56 @@ def test_daily_loss_limit_allows_before_exceeded(risk):
     risk.record_current_balance(9800.0)  # -2%, under limit
     order = risk.evaluate(_buy_signal(), {"USDT": 9800.0}, [])
     assert order is not None
+
+
+def test_sell_without_position_returns_none(risk):
+    sell_signal = Signal(
+        symbol="BTC/USDT", side="SELL", entry_price=65000.0,
+        take_profit=63000.0, stop_loss=67000.0, trailing_sl=False,
+        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+    )
+    assert risk.evaluate(sell_signal, {"USDT": 10000.0}, []) is None
+
+
+def test_sell_with_existing_position_allowed(risk):
+    sell_signal = Signal(
+        symbol="BTC/USDT", side="SELL", entry_price=65000.0,
+        take_profit=63000.0, stop_loss=67000.0, trailing_sl=False,
+        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+    )
+    pos = _open_position("BTC/USDT")
+    assert risk.evaluate(sell_signal, {"USDT": 10000.0}, [pos]) is not None
+
+
+def test_reentry_guard_blocks_duplicate_buy(risk):
+    pos = _open_position("BTC/USDT")
+    assert risk.evaluate(_buy_signal(), {"USDT": 10000.0}, [pos]) is None
+
+
+def test_correlation_filter_blocks_eth_when_btc_open(risk):
+    btc_pos = _open_position("BTC/USDT")
+    eth_signal = Signal(
+        symbol="ETH/USDT", side="BUY", entry_price=3500.0,
+        take_profit=3605.0, stop_loss=3430.0, trailing_sl=False,
+        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+    )
+    assert risk.evaluate(eth_signal, {"USDT": 10000.0}, [btc_pos]) is None
+
+
+def test_confidence_scaled_sizing(risk):
+    # confidence=0.8 → size = 5% × 0.8 = 4% of balance
+    order = risk.evaluate(_buy_signal(confidence=0.8), {"USDT": 10000.0}, [])
+    assert order is not None
+    expected_qty = 10000.0 * 0.05 * 0.8 / 65000.0
+    assert order.quantity == pytest.approx(expected_qty, rel=1e-3)
+
+
+def test_reset_daily_clears_loss_state(risk):
+    risk.record_daily_start_balance(10000.0)
+    risk.record_current_balance(9600.0)  # -4%, limit exceeded
+    assert risk.evaluate(_buy_signal(), {"USDT": 9600.0}, []) is None
+    risk.reset_daily(9600.0)
+    assert risk.evaluate(_buy_signal(), {"USDT": 9600.0}, []) is not None
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -715,8 +864,26 @@ class RiskManager:
         if self._daily_loss_exceeded():
             return None
 
+        open_symbols = {p.symbol for p in positions}
+
+        # SELL guard: cannot sell what we don't own (Spot mode)
+        if signal.side == "SELL" and signal.symbol not in open_symbols:
+            return None
+
+        # Re-entry guard: don't add to an existing position
+        if signal.side == "BUY" and signal.symbol in open_symbols:
+            return None
+
+        # Correlation filter: BTC and ETH treated as correlated — max 1 at a time
+        _CORRELATED = {"BTC/USDT", "ETH/USDT"}
+        if signal.side == "BUY" and signal.symbol in _CORRELATED:
+            if any(p.symbol in _CORRELATED for p in positions):
+                return None
+
         usdt = balance.get("USDT", 0.0)
-        quantity = round((usdt * self._max_position_pct) / signal.entry_price, 8)
+        # Confidence-scaled sizing: base_pct × confidence (e.g. 5% × 0.8 = 4%)
+        scaled_pct = self._max_position_pct * signal.confidence
+        quantity = round((usdt * scaled_pct) / signal.entry_price, 8)
         if quantity <= 0:
             return None
 
@@ -730,6 +897,11 @@ class RiskManager:
             status="PENDING",
             exchange_order_id=None,
         )
+
+    def reset_daily(self, balance: float) -> None:
+        """Call at UTC midnight to start a new trading day."""
+        self._daily_start_balance = balance
+        self._current_balance = balance
 
     def _daily_loss_exceeded(self) -> bool:
         if self._daily_start_balance is None or self._current_balance is None:
@@ -755,7 +927,7 @@ git commit -m "feat: RiskManager with position sizing, SL gate, confidence gate,
 
 ---
 
-## Task 6: Wire Risk Manager into Engine
+## Task 7: Wire Risk Manager into Engine
 
 **Files:**
 - Modify: `core/engine.py`
@@ -971,7 +1143,7 @@ git commit -m "feat: wire RiskManager into Engine, replace sizing placeholder"
 
 ---
 
-## Task 7: Full Integration Smoke Test
+## Task 8: Full Integration Smoke Test
 
 - [ ] **Step 1: Run the complete test suite**
 
@@ -1048,10 +1220,16 @@ Expected: nothing to commit.
 
 ## Self-Review Checklist
 
-- [x] **Spec coverage:** RSI indicator ✓, MACD indicator ✓, ML model interface ✓, combined strategy ✓, Risk Manager (all 5 rules) ✓, Engine wired with Risk Manager ✓
+- [x] **Spec coverage:** RSI indicator ✓, MACD indicator ✓, ADX indicator ✓, ML model interface ✓, combined strategy ✓, Risk Manager (all 9 rules) ✓, Engine wired with Risk Manager ✓
 - [x] **No placeholders:** `_calc_quantity` from Plan 1 removed; fallback in Engine for `risk_manager=None` is intentional backward-compat for existing Plan 1 tests
-- [x] **Type consistency:** `Signal`, `Order`, `Position` imported from `core.models` throughout — no redefinition. `MLModel.predict(pd.Series) -> float` matches `DummyModel.predict` and usage in `RsiMacdStrategy`
+- [x] **Type consistency:** `Signal`, `Order`, `Position` imported from `core.models` throughout — no redefinition
 - [x] **`evaluate` signature:** `risk.evaluate(signal, balance, positions)` matches all test call sites and Engine usage
+- [x] **ADX regime filter:** Sideways markets (ADX < 20) → HOLD — reduces false signals in choppy price action
+- [x] **SELL guard:** RiskManager blocks SELL with no open position (Spot safety — Binance would reject anyway)
+- [x] **Re-entry guard:** RiskManager blocks duplicate BUY on same symbol
+- [x] **Correlation filter:** BTC and ETH treated as correlated — max 1 position across the pair
+- [x] **Confidence-scaled sizing:** Position size = base_pct × confidence (max 5% at confidence=1.0)
+- [x] **Daily reset:** `reset_daily()` called at UTC midnight from main.py trading loop
 
 ---
 

@@ -150,17 +150,21 @@ Append these methods to the `PaperExchange` class (after `get_balance`):
         if pos is None:
             return None
 
-        hit_price: float | None = None
-        exit_reason: str | None = None
+        tp_hit = pos.take_profit is not None and high >= pos.take_profit
+        sl_hit = pos.stop_loss is not None and low <= pos.stop_loss
 
-        if pos.take_profit is not None and high >= pos.take_profit:
-            hit_price = pos.take_profit
-            exit_reason = "TP"
-        elif pos.stop_loss is not None and low <= pos.stop_loss:
-            hit_price = pos.stop_loss
-            exit_reason = "SL"
-
-        if hit_price is None:
+        if tp_hit and sl_hit:
+            # Both within same candle — conservative: SL fills first (worst-case)
+            # Set tp_priority=True in PaperExchange constructor for optimistic simulation
+            if self._tp_priority:
+                hit_price, exit_reason = pos.take_profit, "TP"
+            else:
+                hit_price, exit_reason = pos.stop_loss, "SL"
+        elif tp_hit:
+            hit_price, exit_reason = pos.take_profit, "TP"
+        elif sl_hit:
+            hit_price, exit_reason = pos.stop_loss, "SL"
+        else:
             return None
 
         # Close position
@@ -202,7 +206,14 @@ Append these methods to the `PaperExchange` class (after `get_balance`):
         return list(self._trade_log)
 ```
 
-Also add `self._trade_log: list = []` to `PaperExchange.__init__`.
+Also add `self._trade_log: list = []` and `self._tp_priority: bool = False` to `PaperExchange.__init__`. The `__init__` signature becomes:
+
+```python
+def __init__(self, initial_balance: dict[str, float], fee_rate: float = 0.001, tp_priority: bool = False):
+    ...
+    self._trade_log: list = []
+    self._tp_priority = tp_priority
+```
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -761,6 +772,7 @@ git status  # should be clean
 - [x] **No placeholders:** all methods fully implemented with real logic
 - [x] **Type consistency:** `TradeRecord` defined in `core/models.py` and imported in `exchange/paper.py`, `backtest/runner.py`, `backtest/reporter.py` — no redefinition
 - [x] **Engine update:** `set_position_tp_sl` call is guarded with `hasattr` so existing Plan 1 & 2 tests using plain `Exchange` interface are unaffected
+- [x] **Candle ambiguity:** Same-candle TP+SL defaults to SL-first (conservative). Use `tp_priority=True` in `PaperExchange` constructor for optimistic simulation. Conservative default prevents backtest overfitting.
 
 ---
 

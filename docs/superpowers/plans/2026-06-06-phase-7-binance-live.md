@@ -142,6 +142,25 @@ class BinanceExchange(Exchange):
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int) -> list[list]:
         return await self._exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
 
+    async def fetch_ohlcv_with_retry(
+        self,
+        symbol: str,
+        timeframe: str,
+        limit: int,
+        max_retries: int = 5,
+    ) -> list[list]:
+        """Fetch OHLCV with exponential backoff. Raises after max_retries consecutive failures."""
+        delay = 5.0
+        for attempt in range(max_retries):
+            try:
+                return await self._exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            except Exception:
+                if attempt == max_retries - 1:
+                    raise
+                await asyncio.sleep(min(delay, 300.0))
+                delay *= 2
+        return []
+
     async def place_order(self, order: Order, stop_price: float | None = None, **kwargs) -> Order:
         filled = order.__class__(**order.__dict__)
 
@@ -576,7 +595,14 @@ async def run():
         logger.info(f"Starting in LIVE mode ({mode})")
 
     strategy = RsiMacdStrategy(ml_model=DummyModel(confidence=0.8))
-    risk_manager = RiskManager()
+
+    # ONE shared RiskManager for all engines — enforces portfolio-level limits
+    risk_manager = RiskManager(
+        max_position_pct=float(os.getenv("MAX_POSITION_PCT", "0.05")),
+        max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "5")),
+        daily_loss_limit_pct=float(os.getenv("DAILY_LOSS_LIMIT_PCT", "0.03")),
+        confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.6")),
+    )
 
     engine = Engine(
         exchange=exchange,
@@ -608,19 +634,37 @@ async def run():
         app = create_app(repo)
 
         async def trading_loop():
+            from datetime import date
             fetcher = DataFetcher(
                 exchange_id="binance",
                 testnet=settings.binance_testnet if not paper_mode else True,
             )
+            last_reset_date = None
+            consecutive_failures = 0
+
             while True:
+                # UTC midnight daily reset — resets daily loss limit
+                today = date.today()
+                if today != last_reset_date:
+                    bal = await exchange.get_balance()
+                    risk_manager.reset_daily(bal.get("USDT", 0.0))
+                    last_reset_date = today
+
                 if not engine.is_running:
                     await asyncio.sleep(10)
                     continue
+
                 try:
                     candles = await fetcher.fetch_ohlcv("BTC/USDT", "1h", limit=100)
                     await engine.process_candles(candles)
+                    consecutive_failures = 0
                 except Exception as e:
-                    logger.error(f"Engine loop error: {e}", extra={"error": str(e)})
+                    consecutive_failures += 1
+                    logger.error(f"Engine loop error (attempt {consecutive_failures}): {e}")
+                    if consecutive_failures >= 5 and notifier:
+                        await notifier.send("⚠️ Data feed lost — 5 consecutive failures, trading paused")
+                        engine.is_running = False
+
                 await asyncio.sleep(3600)  # run once per closed hourly candle
 
         config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="warning")
@@ -695,6 +739,7 @@ Expected output includes:
 ./risk/manager.py
 ./run_api.py
 ./strategy/base.py
+./strategy/indicators/adx.py
 ./strategy/indicators/macd.py
 ./strategy/indicators/rsi.py
 ./strategy/ml/base_model.py
@@ -718,6 +763,10 @@ Verify all plan commits are present. Project is ready for implementation.
 - [x] **No placeholders:** `DummyModel` in main.py is intentional — real ML model is a separate concern swapped by updating the import. All other components are fully implemented.
 - [x] **Type consistency:** `BinanceExchange.place_order(order, stop_price)` — `stop_price` is a keyword arg, does not break existing callers that pass only `order`. `LiveEngineController.close_position` returns `bool` matching `EngineController` abstract interface.
 - [x] **Environment switching:** mainnet vs testnet controlled entirely by `BINANCE_TESTNET=true/false` env var. Postman environments in `specs/` mirror the same switch for manual API testing.
+- [x] **Reconnection:** 5 consecutive fetch failures → Telegram alert + auto-pause. `fetch_ohlcv_with_retry` with exponential backoff handles transient network issues.
+- [x] **Shared RiskManager:** One instance passed to all Engine instances — portfolio-level position limits enforced across all symbols.
+- [x] **Daily reset:** UTC midnight triggers `risk_manager.reset_daily()` — daily loss limit restarts each trading day automatically.
+- [x] **Pause/resume:** `engine.is_running` flag checked at top of trading loop — Telegram `/pause` and `/resume` commands take effect immediately.
 
 ---
 

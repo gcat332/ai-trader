@@ -116,7 +116,7 @@ TP/SL operates at two layers:
 
 **Layer 2 — Order Executor:** Sends a Binance OCO order (One Cancels Other) — a LIMIT sell at TP price paired with a STOP-MARKET at SL price. When one fills, the other cancels automatically.
 
-Trailing SL: executor periodically adjusts SL order upward as price moves in favor of the position.
+Trailing SL (v2): `Signal.trailing_sl` field is reserved. Logic is deferred to v2 — see Out of Scope below.
 
 ---
 
@@ -126,13 +126,16 @@ Sits between Signal and Order Executor. Enforces:
 
 | Rule | Default |
 |---|---|
-| Max position size | 5% of portfolio per trade |
-| Max open positions | 5 simultaneous |
-| Daily loss limit | Pause bot if drawdown > 3% in a day |
+| Max position size | 5% × confidence score (scales with signal quality) |
+| Max open positions | 5 simultaneous (shared across all Engine instances) |
+| Daily loss limit | Pause bot if drawdown > 3% in a day (auto-resets at UTC midnight) |
 | Confidence threshold | Reject signal if ML confidence < 0.6 |
 | Minimum SL | Block any signal without a stop_loss |
+| SELL guard | Block SELL if no open position for that symbol (Spot safety) |
+| Re-entry guard | Block BUY if position already open for that symbol |
+| Correlation filter | BTC/USDT and ETH/USDT treated as correlated — max 1 open position across both |
 
-Position sizing uses fixed fractional sizing by default, configurable per strategy.
+Position sizing is confidence-scaled: `size = base_pct × confidence`. A signal with confidence=0.8 uses 4% of portfolio; confidence=1.0 uses the full 5%.
 
 ---
 
@@ -146,7 +149,7 @@ class BaseStrategy:
 
 Each strategy receives a rolling window of OHLCV candles and returns a Signal. Strategies are independent — adding a new one requires only creating a subclass and registering it in config.
 
-Combined strategy (Technical + ML): indicators compute features (RSI, MACD crossover, BB position), ML model scores the feature vector, Signal is emitted only when both indicator conditions and model confidence align.
+Combined strategy (Technical + ML): indicators compute features (RSI, MACD crossover, ADX, ATR, Bollinger Band position, OBV, hour-of-day), ML model scores the feature vector. An **ADX regime filter** (ADX < 20 → HOLD) suppresses false signals in sideways/choppy markets. Signal is emitted only when indicator conditions, regime filter, and model confidence all align.
 
 ---
 
@@ -227,6 +230,68 @@ GET  /ws/feed                                WebSocket: real-time price + order 
 
 ---
 
+## Decision Log
+
+Every decision the bot makes is recorded — not just orders, but every signal evaluation including rejections and HOLDs. This gives full transparency into the bot's reasoning.
+
+### DB Table: `decisions`
+
+| Column | Type | Description |
+|---|---|---|
+| id | TEXT | UUID |
+| timestamp | DATETIME | When decision was made |
+| symbol | TEXT | e.g. "BTC/USDT" |
+| strategy_id | TEXT | Which strategy evaluated |
+| rsi | FLOAT | RSI value at decision time |
+| macd | FLOAT | MACD line value |
+| adx | FLOAT | ADX regime value |
+| confidence | FLOAT | ML model confidence score |
+| signal_side | TEXT | BUY / SELL / HOLD from strategy |
+| final_decision | TEXT | PLACED / REJECTED / HOLD |
+| rejection_reason | TEXT | Why signal was rejected (e.g. "low_confidence", "re-entry", "correlation_filter", "daily_loss_limit") |
+
+### How it's used
+
+- **Dashboard:** Decision Log panel on Live Trading page — shows last N decisions with color-coded outcome (green = placed, orange = rejected, gray = HOLD)
+- **Telegram daily summary:** Bot sends at midnight: "📊 Today: 15 evaluated — 4 placed, 3 rejected (2 low confidence, 1 correlation), 8 hold"
+- **API endpoint:** `GET /api/decisions?symbol=BTC/USDT&from=Y&to=Z`
+
+---
+
+## Self-Improvement: Error Tracking & Model Drift Detection
+
+The system tracks the outcome of every placed signal and uses it to detect when strategy performance degrades.
+
+### DB Table: `signal_outcomes`
+
+| Column | Type | Description |
+|---|---|---|
+| signal_id | TEXT | Foreign key → decisions.id |
+| predicted_confidence | FLOAT | ML model score at signal time |
+| actual_outcome | TEXT | WIN / LOSS / PARTIAL |
+| realized_pnl | FLOAT | Actual PnL of the trade |
+| hold_duration_hours | FLOAT | Time from entry to exit |
+| exit_reason | TEXT | TP / SL / MANUAL |
+
+### Drift Detection Logic
+
+After each trade closes, the system:
+1. Records outcome in `signal_outcomes`
+2. Computes rolling metrics over the last 30 closed trades:
+   - `win_rate_30` — actual win rate
+   - `confidence_calibration` — correlation between predicted confidence and win/loss
+3. If `win_rate_30 < 0.40` (40%): sends Telegram alert `⚠️ Strategy win rate dropped to {X}% over last 30 trades — consider retraining ML model`
+4. If `confidence_calibration < 0.2`: sends alert `⚠️ ML model confidence is uncorrelated with outcomes — model may be stale`
+
+### What this enables
+
+- Detect model drift before it costs real money
+- Know exactly which market conditions the strategy fails in
+- Have data ready for the next ML retraining cycle
+- Dashboard "Strategy Health" card showing rolling win rate + confidence calibration score
+
+---
+
 ## Storage & Logging
 
 ### Trade Database (SQLite → PostgreSQL)
@@ -239,6 +304,8 @@ Structured trade data lives in a database for queryability (e.g. "P&L for BTC la
 | `positions` | Open and closed positions — entry/exit price, realized PnL, mode (SPOT/FUTURES) |
 | `signals` | Every signal emitted by strategy — side, entry, TP, SL, confidence, strategy_id |
 | `backtest_runs` | Backtest metadata — strategy, date range, config, summary stats |
+| `decisions` | Every decision made — signal + rejection reason + final outcome (see Decision Log section) |
+| `signal_outcomes` | Post-trade outcome per signal — WIN/LOSS, realized PnL, hold duration (see Self-Improvement section) |
 
 SQLite for local development. Swap connection string to PostgreSQL for production deployment — no code changes needed.
 
@@ -294,4 +361,6 @@ Log entries include: timestamp, level, module, message, and relevant context (sy
 - Multi-exchange arbitrage
 - Portfolio optimization across multiple assets simultaneously
 - Automated hyperparameter tuning for ML models
+- Trailing stop-loss execution (`Signal.trailing_sl` field reserved, logic deferred to v2)
+- Multi-timeframe strategy analysis (single timeframe per engine in v1)
 - Mobile app

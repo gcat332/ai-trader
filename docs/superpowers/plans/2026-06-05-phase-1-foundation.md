@@ -370,8 +370,9 @@ class Exchange(ABC):
         """Returns list of [timestamp, open, high, low, close, volume]."""
 
     @abstractmethod
-    async def place_order(self, order: Order) -> Order:
-        """Submit order. Returns order with exchange_order_id and updated status."""
+    async def place_order(self, order: Order, current_price: float = 0.0) -> Order:
+        """Submit order. Returns order with exchange_order_id and updated status.
+        current_price is used by PaperExchange to simulate fills; ignored by BinanceExchange."""
 
     @abstractmethod
     async def cancel_order(self, order_id: str, symbol: str) -> None:
@@ -453,8 +454,8 @@ async def test_market_buy_deducts_balance(exchange):
     )
     await exchange.place_order(order, current_price=65000.0)
     balance = await exchange.get_balance()
-    # 0.1 BTC * 65000 = 6500 USDT spent
-    assert balance["USDT"] == pytest.approx(10000.0 - 6500.0, rel=1e-3)
+    # 0.1 BTC * 65000 = 6500 USDT spent + 0.1% fee = 6.5 USDT
+    assert balance["USDT"] == pytest.approx(10000.0 - 6500.0 - 6.5, rel=1e-3)
     assert balance.get("BTC", 0.0) == pytest.approx(0.1, rel=1e-3)
 
 
@@ -510,10 +511,11 @@ from exchange.base import Exchange
 
 class PaperExchange(Exchange):
 
-    def __init__(self, initial_balance: dict[str, float]):
+    def __init__(self, initial_balance: dict[str, float], fee_rate: float = 0.001):
         self._balance = deepcopy(initial_balance)
         self._positions: dict[str, Position] = {}  # keyed by symbol
         self._orders: list[Order] = []
+        self._fee_rate = fee_rate
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int) -> list[list]:
         return []  # paper exchange doesn't fetch — engine feeds candles directly
@@ -527,7 +529,8 @@ class PaperExchange(Exchange):
 
         if order.side == "BUY":
             base_asset = order.symbol.split("/")[0]
-            self._balance["USDT"] = self._balance.get("USDT", 0.0) - cost
+            fee = cost * self._fee_rate
+            self._balance["USDT"] = self._balance.get("USDT", 0.0) - cost - fee
             self._balance[base_asset] = self._balance.get(base_asset, 0.0) + order.quantity
             if order.symbol in self._positions:
                 pos = self._positions[order.symbol]
@@ -548,7 +551,8 @@ class PaperExchange(Exchange):
         elif order.side == "SELL":
             base_asset = order.symbol.split("/")[0]
             proceeds = price * order.quantity
-            self._balance["USDT"] = self._balance.get("USDT", 0.0) + proceeds
+            fee = proceeds * self._fee_rate
+            self._balance["USDT"] = self._balance.get("USDT", 0.0) + proceeds - fee
             self._balance[base_asset] = self._balance.get(base_asset, 0.0) - order.quantity
             if order.symbol in self._positions:
                 pos = self._positions[order.symbol]
@@ -929,7 +933,8 @@ git status  # should show nothing to commit
 - [x] **Spec coverage:** models ✓, config ✓, exchange interface ✓, paper exchange ✓, data fetcher ✓, engine loop ✓, strategy stub ✓
 - [x] **Placeholders:** `_calc_quantity` in engine is documented as placeholder replaced by Risk Manager in Plan 2 — intentional, not a gap
 - [x] **Type consistency:** `Order`, `Position`, `Signal` defined once in `core/models.py` and imported everywhere — no redefinition
-- [x] **`place_order` signature:** `PaperExchange.place_order(order, current_price)` matches usage in `Engine.process_candles` and all tests
+- [x] **`place_order` signature:** `Exchange.place_order(order, current_price=0.0)` — abstract interface includes `current_price` so PaperExchange and BinanceExchange share the same contract
+- [x] **Fee simulation:** `PaperExchange` deducts `fee_rate=0.1%` on every BUY and SELL — backtest results reflect real Binance trading costs
 
 ---
 
