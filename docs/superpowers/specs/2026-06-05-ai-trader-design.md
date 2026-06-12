@@ -82,6 +82,7 @@ class Signal:
     confidence: float                    # 0.0–1.0, from ML model
     strategy_id: str
     timestamp: datetime
+    narrative: str = ""                  # human-readable explanation of decision reasoning
 
 @dataclass
 class Order:
@@ -182,7 +183,10 @@ GET  /api/backtest/{id}                      single backtest result
 GET  /api/trades/history                     real trade history (filter: symbol, strategy, date range)
 GET  /api/backtest/history                   all past backtest runs
 GET  /api/compare?strategy=X&from=Y&to=Z    real vs backtest comparison
-GET  /ws/feed                                WebSocket: real-time price + order updates
+GET  /api/decisions?symbol=X&from=Y&to=Z    decision log with narratives
+GET  /api/health/strategy                   rolling win rate, calibration score, model info
+GET  /api/ab-tests                          A/B test run history
+GET  /ws/feed                               WebSocket: real-time price + order updates
 ```
 
 **React frontend — pages:**
@@ -208,6 +212,13 @@ GET  /ws/feed                                WebSocket: real-time price + order 
 - Side-by-side stats table: Sharpe, max drawdown, win rate, avg PnL per trade
 - Helps identify strategy drift — when live performance diverges from backtest expectations
 
+**Strategy Health**
+- Rolling win rate chart (last 30 / 60 / 90 trades) with threshold line at 40%
+- Confidence calibration score — how well ML model confidence predicts actual outcomes
+- Decision Log table — every recent decision with full narrative, color-coded by outcome
+- A/B Test History — past model comparisons with win rates and whether challenger was applied
+- Current model info: training date, feature count, holdout accuracy
+
 ---
 
 ## Telegram Bot
@@ -215,8 +226,13 @@ GET  /ws/feed                                WebSocket: real-time price + order 
 **Alerts (bot → user):**
 ```
 🟢 BUY  BTC/USDT @ 65,230 | TP: 67,000 | SL: 63,500
+    RSI=24.3 (oversold) | MACD bullish crossover | ADX=32.1 (trending) | ML 88%
+
 🔴 SELL BTC/USDT @ 67,100 | PnL: +$182 (+2.8%)
 ⚠️ Daily loss limit reached — bot paused
+📊 Today: 15 evaluated — 4 placed, 3 rejected, 8 hold  (daily summary)
+⚠️ Win rate dropped to 33% over last 30 trades — retraining triggered
+✅ Model updated — challenger won A/B test (B: 58% vs A: 41% win rate)
 ```
 
 **Commands (user → bot):**
@@ -232,7 +248,45 @@ GET  /ws/feed                                WebSocket: real-time price + order 
 
 ## Decision Log
 
-Every decision the bot makes is recorded — not just orders, but every signal evaluation including rejections and HOLDs. This gives full transparency into the bot's reasoning.
+Every decision the bot makes is recorded — not just orders, but every signal evaluation including rejections and HOLDs — with a **human-readable narrative** explaining the reasoning in plain language.
+
+### Narrative Format
+
+Each decision carries a `narrative` field on the `Signal` dataclass. The strategy composes it from the indicator values before returning:
+
+```
+"RSI=24.3 (oversold) | MACD crossed above signal (+bullish crossover) |
+ADX=32.1 (strong trend, regime active) | Volume 2.4× above 20-period avg |
+ML confidence=88% → BUY"
+
+"RSI=71.2 (overbought) | ADX=14.8 (market not trending) →
+ADX regime filter triggered, HOLD"
+
+"RSI=26.1 (oversold), MACD bullish crossover, confidence=82% →
+strategy says BUY, but BTC/USDT position already open →
+RiskManager: re-entry guard rejected"
+```
+
+The narrative captures **why** each layer made its decision:
+- Strategy: which indicators triggered and what they mean
+- RiskManager: which rule blocked the signal (if rejected)
+- Final outcome: PLACED / HOLD / REJECTED (with reason)
+
+### Narrative Builder
+
+`strategy/narrative.py` — pure function `build_narrative(indicators, signal, rejection_reason)`:
+
+| Indicator | Narrative text |
+|---|---|
+| RSI < 30 | "RSI={v:.1f} (oversold — potential reversal zone)" |
+| RSI > 70 | "RSI={v:.1f} (overbought — potential reversal zone)" |
+| MACD crossed above | "MACD crossed above signal line (bullish momentum)" |
+| MACD crossed below | "MACD crossed below signal line (bearish momentum)" |
+| ADX < 20 | "ADX={v:.1f} (sideways market — regime filter suppressed signal)" |
+| ADX ≥ 20 | "ADX={v:.1f} (trending market — regime active)" |
+| High volume | "Volume {ratio:.1f}× above 20-period avg (strong conviction)" |
+| Low confidence | "ML confidence={v:.0%} (below {threshold:.0%} threshold — rejected)" |
+| Rejection reasons | "→ REJECTED: {reason}" maps to friendly text |
 
 ### DB Table: `decisions`
 
@@ -242,53 +296,127 @@ Every decision the bot makes is recorded — not just orders, but every signal e
 | timestamp | DATETIME | When decision was made |
 | symbol | TEXT | e.g. "BTC/USDT" |
 | strategy_id | TEXT | Which strategy evaluated |
-| rsi | FLOAT | RSI value at decision time |
+| rsi | FLOAT | RSI value |
 | macd | FLOAT | MACD line value |
 | adx | FLOAT | ADX regime value |
-| confidence | FLOAT | ML model confidence score |
+| volume_ratio | FLOAT | Volume vs 20-period avg |
+| confidence | FLOAT | ML model confidence |
 | signal_side | TEXT | BUY / SELL / HOLD from strategy |
 | final_decision | TEXT | PLACED / REJECTED / HOLD |
-| rejection_reason | TEXT | Why signal was rejected (e.g. "low_confidence", "re-entry", "correlation_filter", "daily_loss_limit") |
+| rejection_reason | TEXT | e.g. "re_entry", "correlation_filter", "daily_loss_limit" |
+| narrative | TEXT | Full human-readable explanation |
 
 ### How it's used
 
-- **Dashboard:** Decision Log panel on Live Trading page — shows last N decisions with color-coded outcome (green = placed, orange = rejected, gray = HOLD)
-- **Telegram daily summary:** Bot sends at midnight: "📊 Today: 15 evaluated — 4 placed, 3 rejected (2 low confidence, 1 correlation), 8 hold"
-- **API endpoint:** `GET /api/decisions?symbol=BTC/USDT&from=Y&to=Z`
+- **Dashboard:** Decision Log panel — shows last N decisions with narrative, color-coded by outcome
+- **Telegram daily summary** (midnight): `📊 Today: 15 evaluated — 4 placed, 3 rejected (2 low confidence, 1 correlation), 8 hold`
+- **API:** `GET /api/decisions?symbol=BTC/USDT&from=Y&to=Z`
 
 ---
 
-## Self-Improvement: Error Tracking & Model Drift Detection
+## Self-Improvement: Auto-Retraining + A/B Testing
 
-The system tracks the outcome of every placed signal and uses it to detect when strategy performance degrades.
+When the system detects that strategy performance has degraded, it automatically retrains the ML model, runs a shadow A/B test against the current model, and applies the better one — without human intervention.
 
-### DB Table: `signal_outcomes`
+### Phase 1: Drift Detection
+
+After each trade closes, the system records the outcome and computes rolling metrics:
+
+**DB Table: `signal_outcomes`**
 
 | Column | Type | Description |
 |---|---|---|
-| signal_id | TEXT | Foreign key → decisions.id |
+| signal_id | TEXT | FK → decisions.id |
 | predicted_confidence | FLOAT | ML model score at signal time |
-| actual_outcome | TEXT | WIN / LOSS / PARTIAL |
-| realized_pnl | FLOAT | Actual PnL of the trade |
-| hold_duration_hours | FLOAT | Time from entry to exit |
+| actual_outcome | TEXT | WIN / LOSS |
+| realized_pnl | FLOAT | Actual trade PnL |
+| hold_duration_hours | FLOAT | Entry to exit time |
 | exit_reason | TEXT | TP / SL / MANUAL |
 
-### Drift Detection Logic
+**Rolling metrics (computed over last 30 closed trades):**
+- `win_rate_30` — actual win rate
+- `confidence_calibration` — Pearson correlation between predicted_confidence and (realized_pnl > 0)
 
-After each trade closes, the system:
-1. Records outcome in `signal_outcomes`
-2. Computes rolling metrics over the last 30 closed trades:
-   - `win_rate_30` — actual win rate
-   - `confidence_calibration` — correlation between predicted confidence and win/loss
-3. If `win_rate_30 < 0.40` (40%): sends Telegram alert `⚠️ Strategy win rate dropped to {X}% over last 30 trades — consider retraining ML model`
-4. If `confidence_calibration < 0.2`: sends alert `⚠️ ML model confidence is uncorrelated with outcomes — model may be stale`
+**Drift triggers:**
+- `win_rate_30 < 0.40` → strategy is underperforming
+- `confidence_calibration < 0.20` → model scores are uncorrelated with real outcomes (model is stale)
+
+### Phase 2: Auto-Retraining
+
+When a drift trigger fires, `ModelRetrainer` runs automatically:
+
+```
+DriftDetector fires
+    → ModelRetrainer.trigger()
+        1. Collect last N signal_outcomes as labeled training data
+           features: (rsi, macd, adx, volume_ratio, hour_of_day, ...)
+           label: 1 if WIN else 0
+        2. Train new model (scikit-learn LogisticRegression or RandomForest)
+        3. Evaluate new model on holdout set (last 20% of data)
+        4. If holdout accuracy < current model accuracy → abort, send alert
+        5. Else → hand off to ModelABTester
+```
+
+### Phase 3: Shadow A/B Test
+
+New model never goes live directly. It runs in **shadow mode** — evaluates every signal but never places real orders.
+
+```
+ModelABTester:
+    model_a = current live model
+    model_b = challenger (retrained model)
+
+    For each incoming signal:
+        confidence_a = model_a.predict(features)
+        confidence_b = model_b.predict(features)
+        
+        # Only model_a's confidence is used for real trading
+        # model_b runs silently alongside
+
+    After min_shadow_trades (default: 50):
+        Compare win rates using Welch's t-test (p < 0.05)
+        If model_b win_rate significantly better:
+            → apply_challenger()   # swap model_b → model_a
+            → log ABTestRun (winner=B, auto_applied=True)
+            → Telegram: "✅ Model updated — challenger won A/B test (win rate B:{b_rate:.0%} vs A:{a_rate:.0%})"
+        Else:
+            → keep model_a
+            → log ABTestRun (winner=A, auto_applied=False)
+            → Telegram: "📊 A/B test complete — current model retained (win rate A:{a_rate:.0%} vs B:{b_rate:.0%})"
+```
+
+**DB Table: `ab_test_runs`**
+
+| Column | Type | Description |
+|---|---|---|
+| id | TEXT | UUID |
+| start_time | DATETIME | When shadow test began |
+| end_time | DATETIME | When decision was made |
+| model_a_config | TEXT | JSON — hyperparams + training date of model_a |
+| model_b_config | TEXT | JSON — hyperparams + training date of model_b |
+| model_a_win_rate | FLOAT | Observed win rate during shadow period |
+| model_b_win_rate | FLOAT | Observed win rate during shadow period |
+| model_a_avg_pnl | FLOAT | Average PnL per trade |
+| model_b_avg_pnl | FLOAT | Average PnL per trade |
+| trades_evaluated | INT | Number of trades in shadow window |
+| p_value | FLOAT | Welch's t-test p-value |
+| winner | TEXT | A / B / INCONCLUSIVE |
+| auto_applied | BOOL | Whether challenger was swapped in |
+
+### Safety guardrails
+
+- Shadow test runs for **minimum 50 trades** before any decision (prevents premature conclusions)
+- Challenger is only applied if **p < 0.05** (statistically significant) AND **improvement > 5%** absolute
+- If challenger causes the live win_rate_30 to worsen after being applied → **auto-rollback** to previous model
+- All model files saved to `models/` with timestamp — full rollback history
+- Hard limit: at most **1 auto-retrain per 7 days** (prevents thrashing)
 
 ### What this enables
 
-- Detect model drift before it costs real money
-- Know exactly which market conditions the strategy fails in
-- Have data ready for the next ML retraining cycle
-- Dashboard "Strategy Health" card showing rolling win rate + confidence calibration score
+- Strategy gets better over time without manual intervention
+- Every model change is traceable in `ab_test_runs`
+- Dashboard "Strategy Health" panel: rolling win rate trend + last A/B test result + current model training date
+- The system learns from its own mistakes automatically
 
 ---
 
@@ -304,8 +432,9 @@ Structured trade data lives in a database for queryability (e.g. "P&L for BTC la
 | `positions` | Open and closed positions — entry/exit price, realized PnL, mode (SPOT/FUTURES) |
 | `signals` | Every signal emitted by strategy — side, entry, TP, SL, confidence, strategy_id |
 | `backtest_runs` | Backtest metadata — strategy, date range, config, summary stats |
-| `decisions` | Every decision made — signal + rejection reason + final outcome (see Decision Log section) |
-| `signal_outcomes` | Post-trade outcome per signal — WIN/LOSS, realized PnL, hold duration (see Self-Improvement section) |
+| `decisions` | Every decision made — signal + rejection reason + **narrative explanation** (see Decision Log section) |
+| `signal_outcomes` | Post-trade outcome per signal — WIN/LOSS, realized PnL, confidence calibration data (see Self-Improvement section) |
+| `ab_test_runs` | Every A/B test result — model_a vs model_b win rates, p-value, auto_applied flag |
 
 SQLite for local development. Swap connection string to PostgreSQL for production deployment — no code changes needed.
 
@@ -356,11 +485,26 @@ Log entries include: timestamp, level, module, message, and relevant context (sy
 
 ---
 
+## New Modules (Phase 8)
+
+Decision Log and Self-Improvement require these new files (implemented after Phases 1–7):
+
+```
+strategy/narrative.py          # build_narrative() — compose human-readable decision text
+ml/retrainer.py                # ModelRetrainer — collect data, train new model, trigger A/B test
+ml/ab_tester.py                # ModelABTester — shadow evaluation, Welch's t-test, auto-apply
+db/schema.py                   # Modified — add decisions, signal_outcomes, ab_test_runs tables
+db/repository.py               # Modified — add insert_decision, insert_outcome, record_ab_test
+api/main.py                    # Modified — add /api/decisions, /api/health/strategy, /api/ab-tests
+dashboard/                     # Modified — add Strategy Health page
+```
+
+---
+
 ## Out of Scope (v1)
 
 - Multi-exchange arbitrage
 - Portfolio optimization across multiple assets simultaneously
-- Automated hyperparameter tuning for ML models
 - Trailing stop-loss execution (`Signal.trailing_sl` field reserved, logic deferred to v2)
 - Multi-timeframe strategy analysis (single timeframe per engine in v1)
 - Mobile app
