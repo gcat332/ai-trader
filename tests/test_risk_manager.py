@@ -72,9 +72,9 @@ def test_too_many_positions_returns_none(risk):
 
 def test_position_size_is_5pct_of_balance(risk):
     order = risk.evaluate(_buy_signal(), {"USDT": 10000.0}, [])
-    # 5% of 10000 USDT / 65000 entry = 0.007692...
+    # sizing is confidence-scaled: 5% × 0.8 confidence = 4% of 10000 USDT / 65000 entry
     assert order is not None
-    assert order.quantity == pytest.approx(10000.0 * 0.05 / 65000.0, rel=1e-3)
+    assert order.quantity == pytest.approx(10000.0 * 0.05 * 0.8 / 65000.0, rel=1e-3)
 
 
 def test_daily_loss_limit_blocks_after_exceeded(risk):

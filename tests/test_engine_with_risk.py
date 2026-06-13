@@ -79,8 +79,8 @@ async def test_engine_with_risk_places_sized_order(paper_exchange, risk_manager)
     await engine.process_candles(CANDLES)
     positions = await paper_exchange.get_positions()
     assert len(positions) == 1
-    # quantity = 5% of 10000 / 65000 ≈ 0.00769
-    assert positions[0].quantity == pytest.approx(10000.0 * 0.05 / 65000.0, rel=1e-2)
+    # quantity = confidence-scaled: 5% × 0.85 of 10000 / 65000 ≈ 0.00654
+    assert positions[0].quantity == pytest.approx(10000.0 * 0.05 * 0.85 / 65000.0, rel=1e-2)
 
 
 @pytest.mark.asyncio
