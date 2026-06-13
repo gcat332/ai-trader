@@ -16,8 +16,27 @@ class PaperExchange(Exchange):
         return []  # paper exchange doesn't fetch — engine feeds candles directly
 
     async def place_order(self, order: Order, current_price: float = 0.0) -> Order:
-        price = order.price if order.price else current_price
+        price = order.price if order.price is not None else current_price
         cost = price * order.quantity
+
+        if order.side == "BUY":
+            base_asset = order.symbol.split("/")[0]
+            fee = cost * self._fee_rate
+            if self._balance.get("USDT", 0.0) < cost + fee:
+                failed = deepcopy(order)
+                failed.status = "FAILED"
+                failed.exchange_order_id = None
+                self._orders.append(failed)
+                return failed
+        elif order.side == "SELL":
+            pos = self._positions.get(order.symbol)
+            if pos is None or order.quantity > pos.quantity:
+                failed = deepcopy(order)
+                failed.status = "FAILED"
+                failed.exchange_order_id = None
+                self._orders.append(failed)
+                return failed
+
         filled = deepcopy(order)
         filled.exchange_order_id = str(uuid.uuid4())
         filled.status = "FILLED"
@@ -62,7 +81,7 @@ class PaperExchange(Exchange):
         pass
 
     async def get_positions(self) -> list[Position]:
-        return list(self._positions.values())
+        return [deepcopy(p) for p in self._positions.values()]
 
     async def get_balance(self) -> dict[str, float]:
         return deepcopy(self._balance)
