@@ -53,6 +53,12 @@ class Engine:
 
         if order is not None:
             await self.exchange.place_order(order, current_price=current_price)
+            if hasattr(self.exchange, "set_position_tp_sl"):
+                self.exchange.set_position_tp_sl(
+                    signal.symbol,
+                    take_profit=signal.take_profit,
+                    stop_loss=signal.stop_loss,
+                )
 
     async def run_once(self, limit: int = 100) -> None:
         candles = await self.exchange.fetch_ohlcv(self.symbol, self.timeframe, limit)

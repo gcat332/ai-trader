@@ -6,11 +6,13 @@ from exchange.base import Exchange
 
 class PaperExchange(Exchange):
 
-    def __init__(self, initial_balance: dict[str, float], fee_rate: float = 0.001):
+    def __init__(self, initial_balance: dict[str, float], fee_rate: float = 0.001, tp_priority: bool = False):
         self._balance = deepcopy(initial_balance)
         self._positions: dict[str, Position] = {}  # keyed by symbol
         self._orders: list[Order] = []
         self._fee_rate = fee_rate
+        self._trade_log: list = []
+        self._tp_priority = tp_priority
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int) -> list[list]:
         return []  # paper exchange doesn't fetch — engine feeds candles directly
@@ -85,3 +87,75 @@ class PaperExchange(Exchange):
 
     async def get_balance(self) -> dict[str, float]:
         return deepcopy(self._balance)
+
+    def set_position_tp_sl(
+        self, symbol: str, take_profit: float | None, stop_loss: float | None
+    ) -> None:
+        if symbol in self._positions:
+            self._positions[symbol].take_profit = take_profit
+            self._positions[symbol].stop_loss = stop_loss
+
+    async def tick(
+        self, symbol: str, high: float, low: float, close: float
+    ) -> Order | None:
+        """Check if TP or SL was hit this candle. Closes position and returns fill Order if so."""
+        from datetime import datetime
+        from core.models import TradeRecord
+        pos = self._positions.get(symbol)
+        if pos is None:
+            return None
+
+        tp_hit = pos.take_profit is not None and high >= pos.take_profit
+        sl_hit = pos.stop_loss is not None and low <= pos.stop_loss
+
+        if tp_hit and sl_hit:
+            # Both within same candle — conservative: SL fills first (worst-case)
+            # Set tp_priority=True in PaperExchange constructor for optimistic simulation
+            if self._tp_priority:
+                hit_price, exit_reason = pos.take_profit, "TP"
+            else:
+                hit_price, exit_reason = pos.stop_loss, "SL"
+        elif tp_hit:
+            hit_price, exit_reason = pos.take_profit, "TP"
+        elif sl_hit:
+            hit_price, exit_reason = pos.stop_loss, "SL"
+        else:
+            return None
+
+        # Close position
+        proceeds = hit_price * pos.quantity
+        base_asset = symbol.split("/")[0]
+        self._balance["USDT"] = self._balance.get("USDT", 0.0) + proceeds
+        self._balance[base_asset] = max(0.0, self._balance.get(base_asset, 0.0) - pos.quantity)
+
+        pnl = (hit_price - pos.entry_price) * pos.quantity
+        self._trade_log.append(TradeRecord(
+            symbol=symbol,
+            side="SELL",
+            entry_price=pos.entry_price,
+            exit_price=hit_price,
+            quantity=pos.quantity,
+            realized_pnl=pnl,
+            entry_time=datetime.utcnow(),
+            exit_time=datetime.utcnow(),
+            exit_reason=exit_reason,
+        ))
+
+        del self._positions[symbol]
+
+        fill = Order(
+            id=str(uuid.uuid4()),
+            symbol=symbol,
+            side="SELL",
+            type="MARKET",
+            quantity=pos.quantity,
+            price=hit_price,
+            status="FILLED",
+            exchange_order_id=str(uuid.uuid4()),
+        )
+        self._orders.append(fill)
+        return fill
+
+    def get_trade_log(self) -> list:
+        from core.models import TradeRecord
+        return list(self._trade_log)
