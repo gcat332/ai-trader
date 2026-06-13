@@ -71,3 +71,35 @@ def test_macd_bullish_crossover_detected():
     curr_above = macd_line >= signal_line
     crossovers = (prev_below & curr_above).sum()
     assert crossovers >= 1
+
+
+# Append to tests/test_indicators.py
+from strategy.indicators.adx import compute_adx
+
+
+def test_adx_length_matches_input():
+    n = 60
+    high  = pd.Series([float(100 + i % 5) for i in range(n)])
+    low   = pd.Series([float(98  + i % 5) for i in range(n)])
+    close = pd.Series([float(99  + i % 5) for i in range(n)])
+    result = compute_adx(high, low, close, period=14)
+    assert len(result) == n
+
+
+def test_adx_values_non_negative():
+    n = 60
+    high  = pd.Series([float(100 + i) for i in range(n)])
+    low   = pd.Series([float(98  + i) for i in range(n)])
+    close = pd.Series([float(99  + i) for i in range(n)])
+    result = compute_adx(high, low, close, period=14)
+    valid = result.dropna()
+    assert (valid >= 0).all()
+
+
+def test_adx_trending_market_above_threshold():
+    n = 60
+    high  = pd.Series([float(100 + i * 2)     for i in range(n)])
+    low   = pd.Series([float(100 + i * 2 - 1) for i in range(n)])
+    close = pd.Series([float(100 + i * 2)     for i in range(n)])
+    result = compute_adx(high, low, close, period=14)
+    assert result.iloc[-1] > 20
