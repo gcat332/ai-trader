@@ -1,17 +1,26 @@
-import uuid
+# core/engine.py
 import pandas as pd
 from core.models import Order, Signal
 from exchange.base import Exchange
+from risk.manager import RiskManager
 from strategy.base import BaseStrategy
 
 
 class Engine:
 
-    def __init__(self, exchange: Exchange, strategy: BaseStrategy, symbol: str, timeframe: str):
+    def __init__(
+        self,
+        exchange: Exchange,
+        strategy: BaseStrategy,
+        symbol: str,
+        timeframe: str,
+        risk_manager: RiskManager | None = None,
+    ):
         self.exchange = exchange
         self.strategy = strategy
         self.symbol = symbol
         self.timeframe = timeframe
+        self._risk_manager = risk_manager
 
     async def process_candles(self, raw_candles: list[list]) -> None:
         df = pd.DataFrame(
@@ -24,21 +33,26 @@ class Engine:
         if signal.side == "HOLD":
             return
 
-        order = Order(
-            id=str(uuid.uuid4()),
-            symbol=self.symbol,
-            side=signal.side,
-            type="MARKET",
-            quantity=self._calc_quantity(current_price),
-            price=None,
-            status="PENDING",
-            exchange_order_id=None,
-        )
-        await self.exchange.place_order(order, current_price=current_price)
+        if self._risk_manager is not None:
+            balance = await self.exchange.get_balance()
+            positions = await self.exchange.get_positions()
+            order = self._risk_manager.evaluate(signal, balance, positions)
+        else:
+            from core.models import Order
+            import uuid
+            order = Order(
+                id=str(uuid.uuid4()),
+                symbol=self.symbol,
+                side=signal.side,
+                type="MARKET",
+                quantity=round(0.05 * 10000.0 / current_price, 6),
+                price=None,
+                status="PENDING",
+                exchange_order_id=None,
+            )
 
-    def _calc_quantity(self, price: float, fraction: float = 0.05) -> float:
-        """Placeholder sizing: 5% of USDT balance / price. Risk manager replaces this in Plan 2."""
-        return round(fraction * 10000.0 / price, 6)
+        if order is not None:
+            await self.exchange.place_order(order, current_price=current_price)
 
     async def run_once(self, limit: int = 100) -> None:
         candles = await self.exchange.fetch_ohlcv(self.symbol, self.timeframe, limit)
