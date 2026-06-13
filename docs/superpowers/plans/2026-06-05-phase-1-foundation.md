@@ -41,7 +41,7 @@
 ```toml
 [build-system]
 requires = ["setuptools>=68"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-trader"
@@ -51,7 +51,7 @@ dependencies = [
     "ccxt>=4.3",
     "python-dotenv>=1.0",
     "pandas>=2.2",
-    "pandas-ta>=0.3",
+    "pandas-ta>=0.4.71b0",
 ]
 
 [project.optional-dependencies]
@@ -61,10 +61,15 @@ dev = [
     "pytest-mock>=3.14",
 ]
 
+[tool.setuptools]
+packages = ["core", "exchange", "data", "strategy", "risk", "backtest", "notifier", "api"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 ```
+
+> **Note (verified during implementation):** `pandas-ta` has no stable `0.3` release on PyPI — use the `0.4.71b0` beta. The explicit `[tool.setuptools] packages` list is required because flat-layout auto-discovery aborts on multiple top-level packages. Requires a Python **3.12** environment (`python3.12 -m venv .venv`).
 
 - [ ] **Step 2: Create `.env.example`**
 
