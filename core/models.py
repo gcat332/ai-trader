@@ -38,3 +38,16 @@ class Position:
     take_profit: float | None
     stop_loss: float | None
     mode: Literal["SPOT", "FUTURES"]
+
+
+@dataclass
+class TradeRecord:
+    symbol: str
+    side: Literal["BUY", "SELL"]
+    entry_price: float
+    exit_price: float
+    quantity: float
+    realized_pnl: float
+    entry_time: datetime
+    exit_time: datetime
+    exit_reason: Literal["TP", "SL", "MANUAL"]
