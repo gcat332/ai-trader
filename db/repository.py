@@ -170,6 +170,43 @@ class Repository:
         cols = [d[0] for d in cursor.description]
         return [dict(zip(cols, row)) for row in rows]
 
+    async def insert_ab_test_run(self, run: dict) -> None:
+        await self._conn.execute(
+            """INSERT INTO ab_test_runs
+               (id, start_time, end_time, champion_id, challenger_id,
+                champion_win_rate, challenger_win_rate, p_value, outcome, notes)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (run["id"], run["start_time"], run.get("end_time"),
+             run["champion_id"], run["challenger_id"],
+             run.get("champion_win_rate"), run.get("challenger_win_rate"),
+             run.get("p_value"), run.get("outcome"), run.get("notes")),
+        )
+        await self._conn.commit()
+
+    async def get_ab_test_history(self, limit: int = 20) -> list[dict]:
+        cursor = await self._conn.execute(
+            "SELECT * FROM ab_test_runs ORDER BY start_time DESC LIMIT ?", (limit,)
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+
+    async def get_last_retrain_time(self) -> str | None:
+        """Returns ISO timestamp of the most recent A/B test's start_time, or None."""
+        cursor = await self._conn.execute(
+            "SELECT start_time FROM ab_test_runs ORDER BY start_time DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def get_signal_outcomes(self, limit: int = 30) -> list[dict]:
+        cursor = await self._conn.execute(
+            "SELECT * FROM signal_outcomes ORDER BY rowid DESC LIMIT ?", (limit,)
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+
     async def get_decision_metrics(self, limit: int = 30) -> dict:
         """Compute win_rate and avg_pnl over the last `limit` PLACED signal outcomes."""
         cursor = await self._conn.execute(
