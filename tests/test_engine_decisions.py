@@ -84,6 +84,25 @@ async def test_engine_logs_rejected_decision(repo):
     assert decisions[0]["rejection_reason"] == "missing_stop_loss"
 
 
+def test_engine_accepts_ab_tester_param():
+    from ml.ab_tester import ModelABTester
+    from ml.base_model import BaseMLModel
+
+    class Dummy(BaseMLModel):
+        def predict(self, f): return 0.7
+
+    exchange = PaperExchange(initial_balance={"USDT": 10000.0})
+    ab_tester = ModelABTester(champion=Dummy(), challenger=Dummy())
+    engine = Engine(
+        exchange=exchange,
+        strategy=BuyWithSlStrategy(),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        ab_tester=ab_tester,
+    )
+    assert engine._ab_tester is ab_tester
+
+
 @pytest.mark.asyncio
 async def test_engine_record_trade_outcome(repo):
     from core.models import TradeRecord
