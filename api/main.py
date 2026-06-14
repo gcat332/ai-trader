@@ -1,6 +1,7 @@
 # api/main.py
 import asyncio
 import json
+import os
 from datetime import date
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,18 +9,32 @@ from db.repository import Repository
 from api import bus
 
 
-def create_app(repo: Repository) -> FastAPI:
+def create_app(repo: Repository, exchange=None) -> FastAPI:
     app = FastAPI(title="AI Trader API")
+    origins = os.getenv("CORS_ORIGINS", "*").split(",")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
     @app.get("/api/positions")
     async def get_positions():
-        return await repo.get_trade_history()  # open positions would come from live engine state
+        if exchange is not None:
+            positions = await exchange.get_positions()
+            return [
+                {
+                    "symbol": p.symbol,
+                    "side": p.side,
+                    "entry_price": p.entry_price,
+                    "quantity": p.quantity,
+                    "unrealized_pnl": p.unrealized_pnl,
+                    "mode": p.mode,
+                }
+                for p in positions
+            ]
+        return await repo.get_trade_history()  # fallback: closed trade history
 
     @app.get("/api/orders")
     async def get_orders(symbol: str | None = None):

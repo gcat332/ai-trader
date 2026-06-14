@@ -7,6 +7,20 @@ from db.repository import Repository
 from api.main import create_app
 
 
+# ── Fix 1: CORS configurable via CORS_ORIGINS env ───────────────────────────
+
+@pytest.mark.asyncio
+async def test_app_builds_and_health_route_responds():
+    """create_app still works and a basic route responds (Fix 1 regression guard)."""
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/strategies")
+    assert resp.status_code == 200
+
+
 @pytest.fixture
 async def client():
     async with aiosqlite.connect(":memory:") as conn:
