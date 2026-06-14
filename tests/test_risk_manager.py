@@ -139,3 +139,24 @@ def test_reset_daily_clears_loss_state(risk):
     assert risk.evaluate(_buy_signal(), {"USDT": 9600.0}, []) is None
     risk.reset_daily(9600.0)
     assert risk.evaluate(_buy_signal(), {"USDT": 9600.0}, []) is not None
+
+
+def test_rejection_reason_low_confidence(risk):
+    risk.evaluate(_buy_signal(confidence=0.4), {"USDT": 10000.0}, [])
+    assert risk.last_rejection_reason == "low_confidence"
+
+
+def test_rejection_reason_missing_sl(risk):
+    risk.evaluate(_buy_signal(stop_loss=None), {"USDT": 10000.0}, [])
+    assert risk.last_rejection_reason == "missing_stop_loss"
+
+
+def test_rejection_reason_none_on_success(risk):
+    risk.evaluate(_buy_signal(), {"USDT": 10000.0}, [])
+    assert risk.last_rejection_reason is None
+
+
+def test_rejection_reason_re_entry(risk):
+    pos = _open_position("BTC/USDT")
+    risk.evaluate(_buy_signal(), {"USDT": 10000.0}, [pos])
+    assert risk.last_rejection_reason == "re_entry"
