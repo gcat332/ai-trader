@@ -1,4 +1,5 @@
 from datetime import datetime
+import pytest
 from core.models import Signal, Order, Position
 
 
@@ -63,3 +64,58 @@ def test_position_pnl_field():
     )
     assert pos.unrealized_pnl == 20.0
     assert pos.mode == "SPOT"
+
+
+from core.models import DecisionRecord, SignalOutcome
+
+
+def test_signal_has_narrative_field():
+    sig = Signal(
+        symbol="BTC/USDT", side="BUY", entry_price=65000.0,
+        take_profit=67000.0, stop_loss=63500.0, trailing_sl=False,
+        confidence=0.88, strategy_id="rsi_macd", timestamp=datetime(2026, 1, 1),
+    )
+    # narrative defaults to empty string
+    assert sig.narrative == ""
+
+
+def test_signal_narrative_can_be_set():
+    sig = Signal(
+        symbol="BTC/USDT", side="BUY", entry_price=65000.0,
+        take_profit=67000.0, stop_loss=63500.0, trailing_sl=False,
+        confidence=0.88, strategy_id="rsi_macd", timestamp=datetime(2026, 1, 1),
+        narrative="RSI=24.3 (oversold) | MACD bullish crossover → BUY",
+    )
+    assert "oversold" in sig.narrative
+
+
+def test_decision_record_fields():
+    from datetime import datetime
+    rec = DecisionRecord(
+        id="dec-001",
+        timestamp=datetime(2026, 1, 1, 12, 0),
+        symbol="BTC/USDT",
+        strategy_id="rsi_macd",
+        signal_side="BUY",
+        confidence=0.88,
+        narrative="RSI=24.3 (oversold) | MACD bullish crossover → BUY",
+        final_decision="PLACED",
+        rejection_reason=None,
+        entry_price=65000.0,
+    )
+    assert rec.final_decision == "PLACED"
+    assert rec.rejection_reason is None
+
+
+def test_signal_outcome_fields():
+    from core.models import SignalOutcome
+    outcome = SignalOutcome(
+        decision_id="dec-001",
+        predicted_confidence=0.88,
+        actual_outcome="WIN",
+        realized_pnl=182.5,
+        hold_duration_hours=3.5,
+        exit_reason="TP",
+    )
+    assert outcome.actual_outcome == "WIN"
+    assert outcome.realized_pnl == pytest.approx(182.5)

@@ -123,3 +123,29 @@ async def test_handle_close_command(mock_controller):
     mock_controller.close_position.assert_awaited_once_with("BTC")
     call_text = update.message.reply_text.call_args[0][0]
     assert "closed" in call_text.lower() or "BTC" in call_text
+
+
+def test_format_buy_signal_includes_narrative():
+    signal = Signal(
+        symbol="BTC/USDT", side="BUY", entry_price=65230.0,
+        take_profit=67000.0, stop_loss=63500.0,
+        trailing_sl=False, confidence=0.88,
+        strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+        narrative="RSI=24.3 (oversold) | MACD bullish crossover | ML 88% → BUY placed",
+    )
+    text = format_signal_alert(signal)
+    assert "oversold" in text or "RSI" in text
+
+
+def test_format_daily_summary():
+    from notifier.telegram import format_daily_summary
+    text = format_daily_summary(
+        total_evaluated=15,
+        placed=4,
+        rejected=3,
+        hold=8,
+        rejection_breakdown={"low_confidence": 2, "correlation_filter": 1},
+    )
+    assert "15" in text
+    assert "4" in text
+    assert "placed" in text.lower() or "PLACED" in text

@@ -14,6 +14,7 @@ class Signal:
     confidence: float  # 0.0–1.0
     strategy_id: str
     timestamp: datetime
+    narrative: str = ""
 
 
 @dataclass
@@ -50,4 +51,28 @@ class TradeRecord:
     realized_pnl: float
     entry_time: datetime
     exit_time: datetime
+    exit_reason: Literal["TP", "SL", "MANUAL"]
+
+
+@dataclass
+class DecisionRecord:
+    id: str
+    timestamp: datetime
+    symbol: str
+    strategy_id: str
+    signal_side: Literal["BUY", "SELL", "HOLD"]
+    confidence: float
+    narrative: str
+    final_decision: Literal["PLACED", "REJECTED", "HOLD"]
+    rejection_reason: str | None
+    entry_price: float
+
+
+@dataclass
+class SignalOutcome:
+    decision_id: str
+    predicted_confidence: float
+    actual_outcome: Literal["WIN", "LOSS"]
+    realized_pnl: float
+    hold_duration_hours: float
     exit_reason: Literal["TP", "SL", "MANUAL"]

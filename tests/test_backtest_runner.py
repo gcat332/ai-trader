@@ -90,3 +90,29 @@ async def test_runner_does_not_open_position_while_one_open():
     # Only the first candle opens a position — subsequent candles are blocked by max_open_positions
     # No trades complete because price never moves to hit TP/SL
     assert len(trades) == 0
+
+
+@pytest.mark.asyncio
+async def test_runner_records_outcomes_in_db():
+    import aiosqlite
+    from db.schema import init_db
+    from db.repository import Repository
+
+    prices = [60000.0] + [62000.0] * 3  # TP hit on second candle
+    candles = _make_candles(prices)
+
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+
+        runner = BacktestRunner(
+            strategy=AlwaysBuyWithSlStrategy(),
+            risk_manager=RiskManager(max_position_pct=0.05),
+            initial_balance={"USDT": 10000.0},
+            symbol="BTC/USDT",
+            repo=repo,
+        )
+        await runner.run(candles)
+
+        metrics = await repo.get_decision_metrics(limit=30)
+        assert metrics["total"] >= 1

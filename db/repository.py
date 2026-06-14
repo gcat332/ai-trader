@@ -129,3 +129,61 @@ class Repository:
             return None
         cols = [d[0] for d in cursor.description]
         return dict(zip(cols, row))
+
+    async def insert_decision(self, rec: "DecisionRecord") -> None:
+        from core.models import DecisionRecord
+        await self._conn.execute(
+            """INSERT INTO decisions
+               (id, timestamp, symbol, strategy_id, signal_side, confidence,
+                narrative, final_decision, rejection_reason, entry_price)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (rec.id, rec.timestamp.isoformat(), rec.symbol, rec.strategy_id,
+             rec.signal_side, rec.confidence, rec.narrative,
+             rec.final_decision, rec.rejection_reason, rec.entry_price),
+        )
+        await self._conn.commit()
+
+    async def insert_signal_outcome(self, outcome: "SignalOutcome") -> None:
+        from core.models import SignalOutcome
+        await self._conn.execute(
+            """INSERT INTO signal_outcomes
+               (decision_id, predicted_confidence, actual_outcome,
+                realized_pnl, hold_duration_hours, exit_reason)
+               VALUES (?,?,?,?,?,?)""",
+            (outcome.decision_id, outcome.predicted_confidence,
+             outcome.actual_outcome, outcome.realized_pnl,
+             outcome.hold_duration_hours, outcome.exit_reason),
+        )
+        await self._conn.commit()
+
+    async def get_decisions(self, symbol: str | None = None, limit: int = 100) -> list[dict]:
+        if symbol:
+            cursor = await self._conn.execute(
+                "SELECT * FROM decisions WHERE symbol=? ORDER BY timestamp DESC LIMIT ?",
+                (symbol, limit),
+            )
+        else:
+            cursor = await self._conn.execute(
+                "SELECT * FROM decisions ORDER BY timestamp DESC LIMIT ?", (limit,)
+            )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+
+    async def get_decision_metrics(self, limit: int = 30) -> dict:
+        """Compute win_rate and avg_pnl over the last `limit` PLACED signal outcomes."""
+        cursor = await self._conn.execute(
+            """SELECT so.actual_outcome, so.realized_pnl
+               FROM signal_outcomes so
+               JOIN decisions d ON so.decision_id = d.id
+               WHERE d.final_decision = 'PLACED'
+               ORDER BY d.timestamp DESC LIMIT ?""",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            return {"total": 0, "win_rate": 0.0, "avg_pnl": 0.0}
+        total = len(rows)
+        wins = sum(1 for r in rows if r[0] == "WIN")
+        avg_pnl = sum(r[1] for r in rows) / total
+        return {"total": total, "win_rate": wins / total, "avg_pnl": avg_pnl}

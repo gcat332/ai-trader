@@ -102,3 +102,21 @@ def test_signal_contains_strategy_id():
     strategy = RsiMacdStrategy(ml_model=DummyModel(confidence=0.8))
     signal = strategy.on_candle("BTC/USDT", ohlcv)
     assert signal.strategy_id == "rsi_macd"
+
+
+def test_buy_signal_has_narrative():
+    prices = _falling_then_rising()
+    ohlcv = _make_ohlcv(prices)
+    strategy = RsiMacdStrategy(ml_model=DummyModel(confidence=0.8))
+    signal = strategy.on_candle("BTC/USDT", ohlcv)
+    if signal.side == "BUY":
+        assert len(signal.narrative) > 0
+        assert "RSI" in signal.narrative
+
+
+def test_hold_signal_has_narrative():
+    prices = [100.0] * 30  # flat — no crossover
+    ohlcv = _make_ohlcv(prices)
+    strategy = RsiMacdStrategy(ml_model=DummyModel(confidence=0.8))
+    signal = strategy.on_candle("BTC/USDT", ohlcv)
+    assert isinstance(signal.narrative, str)

@@ -78,6 +78,19 @@ def create_app(repo: Repository) -> FastAPI:
         backtest = await repo.get_backtest_history()
         return {"live_trades": live, "backtest_runs": backtest}
 
+    @app.get("/api/decisions")
+    async def get_decisions(
+        symbol: str | None = None,
+        limit: int = 50,
+    ):
+        rows = await repo.get_decisions(symbol=symbol, limit=limit)
+        return {"decisions": rows}
+
+    @app.get("/api/decisions/metrics")
+    async def get_decision_metrics(limit: int = 30):
+        metrics = await repo.get_decision_metrics(limit=limit)
+        return metrics
+
     @app.websocket("/ws/feed")
     async def websocket_feed(websocket: WebSocket):
         await websocket.accept()
