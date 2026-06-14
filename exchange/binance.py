@@ -12,7 +12,10 @@ class BinanceExchange(Exchange):
             "apiKey": api_key,
             "secret": api_secret,
             "enableRateLimit": True,
-            "options": {"defaultType": "spot"},
+            # This is a spot-only bot. Restrict market loading to spot so ccxt does not
+            # try to reach the coin-margined (dapi) futures testnet during load_markets —
+            # that endpoint is unavailable on testnet and raises ExchangeNotAvailable.
+            "options": {"defaultType": "spot", "fetchMarkets": ["spot"]},
         })
         if testnet:
             self._exchange.set_sandbox_mode(True)
