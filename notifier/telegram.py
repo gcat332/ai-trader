@@ -100,8 +100,8 @@ class TelegramNotifier:
         self._app.add_handler(CommandHandler("pnl", self.cmd_pnl))
         self._app.add_handler(CommandHandler("close", self.cmd_close))
         await self._app.initialize()
-        await self._app.start()
         await self._app.updater.start_polling()
+        await self._app.start()
 
     async def stop(self) -> None:
         if self._app:

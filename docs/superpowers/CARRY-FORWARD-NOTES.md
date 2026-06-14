@@ -47,36 +47,38 @@ Status legend: ⬜ open · ✅ done
   `strategy_id` column, so `/api/trades/history` and `/api/compare` silently ignore the strategy
   filter. Add `strategy_id` to the trade/positions schema and wire the filter. Found: Phase 4 review.
 - ⬜ **CORS `allow_origins=["*"]` (Nit).** Lock to the dashboard origin in production. `api/main.py`.
-- ⬜ **TelegramNotifier.start() lifecycle order (Important, untested).** `notifier/telegram.py` `start()`
-  calls `await self._app.start()` BEFORE `await self._app.updater.start_polling()`. For
-  python-telegram-bot v22.8 the correct async-in-existing-loop order is
-  `initialize()` → `updater.start_polling()` → `start()`. Not caught by tests (start() is never
-  called — `_app` stays None). Fix AND verify against a real/test bot token when the bot is wired
-  into the main loop. Found: Phase 6 review.
-- ⬜ **`/close` symbol contract (Important).** `cmd_close` passes a BARE base asset (e.g. "BTC", not
-  "BTC/USDT") to `controller.close_position()`. Phase 7's `EngineController.close_position`
-  implementation must resolve the bare asset to the traded pair (or change the Telegram UX to
-  `/close BTC/USDT`). Found: Phase 6 review.
+- 🔶 **TelegramNotifier.start() lifecycle order (reordered Phase 7, needs LIVE verification).** The
+  ptb-v22 call order was corrected in Phase 7 (`initialize()` → `updater.start_polling()` →
+  `start()`), but the path is not unit-tested (start() never called in tests). Verify against a
+  real/test bot token before going live. Found: Phase 6; reordered: Phase 7.
+- ✅ **`/close` symbol contract (Important).** DONE in Phase 7: `LiveEngineController.close_position`
+  matches `p.symbol == symbol or p.symbol.startswith(symbol)`, so bare "BTC" resolves to "BTC/USDT".
+  Found: Phase 6; handled: Phase 7.
 - ⬜ **`TelegramNotifier.send()` silent no-op before start() (Nit).** When `_app is None`, `send()`
   returns silently — messages dropped if `on_signal`/`on_order_filled` fire before `start()`.
   Add a `logger.warning` once the logger is wired in the live loop. Found: Phase 6 review.
 - ⬜ **Single shared aiosqlite connection (Note).** Safe but serial (aiosqlite serializes through one
   thread). Consider connection handling if throughput becomes a concern. Found: Phase 4 review.
 
-- ⬜ **Daily-loss gate is dormant (Important, safety-critical).** `RiskManager._daily_loss_exceeded`
-  reads `_current_balance`/`_daily_start_balance`, but nothing calls `record_current_balance()` /
-  `record_daily_start_balance()` in the engine. Both stay `None` → the 3% daily-loss circuit
-  breaker NEVER fires in real use. The Phase 7 trading loop MUST call
-  `record_daily_start_balance()` at startup, `record_current_balance(balance["USDT"])` each tick
-  (the Phase 7 plan already has `reset_daily()` at UTC midnight — verify it also wires current
-  balance). Preferred robust fix: refactor `_daily_loss_exceeded` to take the balance dict already
-  passed to `evaluate()`, removing the hidden stateful coupling that can be forgotten.
-  Found: Phase 2 review.
+- ✅ **Daily-loss gate is dormant (Important, safety-critical).** DONE in Phase 7: `main.py` calls
+  `record_daily_start_balance()` at startup and `record_current_balance(equity)` each tick before
+  `evaluate()`, where `equity = free USDT + Σ(pos.qty × last_close)` (mark-to-market). Reviewer
+  traced the order of operations and confirmed the 3% breaker now fires. Found: Phase 2; fixed: Phase 7.
 
-- ⬜ **Dust-quantity rounding (Important).** `RiskManager.evaluate` rounds quantity to 8 dp and only
-  guards `quantity <= 0`. A tiny positive quantity below the exchange `minQty`/`minNotional` would
-  be submitted and rejected by Binance. The Phase 7 executor must enforce `stepSize`/`minNotional`
-  rounding from exchange filters before submitting. Found: Phase 2 review.
+- ⬜ **Dust-quantity rounding (Important, still open — deferred from Phase 7).** Add `stepSize`/
+  `minNotional` rounding (ccxt `amount_to_precision` + `load_markets`) in
+  `BinanceExchange.place_order`, verified against the real testnet. A tiny positive quantity below
+  the exchange minimum is otherwise submitted and rejected. Deferred from Phase 7 (needs
+  live-testnet verification). Found: Phase 2 review.
+
+- ⬜ **OCO stop-limit fill risk (Important).** `BinanceExchange.place_order` sets
+  `stopLimitPrice == stopPrice` for the SL leg — in a fast move price can gap through the limit and
+  the SL fails to fill. Add a configurable slippage buffer (e.g. `stopLimitPrice = stopPrice ×
+  (1 - buffer)` for sells). Found: Phase 7 review.
+
+- ⬜ **get_positions spot/futures mismatch (Note).** `BinanceExchange.get_positions` reads futures
+  fields and sets `mode="FUTURES"` on a `defaultType: spot` client — dormant on spot. Revisit when
+  futures is enabled. Found: Phase 7 review.
 
 ---
 

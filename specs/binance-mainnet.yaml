@@ -1,0 +1,65 @@
+# specs/binance-mainnet.yaml
+openapi: "3.0.3"
+info:
+  title: Binance REST API (Mainnet)
+  version: "1.0"
+servers:
+  - url: https://api.binance.com
+    description: Binance Mainnet
+paths:
+  /api/v3/klines:
+    get:
+      summary: Fetch OHLCV candlestick data
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema: { type: string }
+        - name: interval
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 500 }
+  /api/v3/order:
+    post:
+      summary: Place new order (MARKET / LIMIT / STOP_MARKET)
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [symbol, side, type, quantity]
+              properties:
+                symbol: { type: string }
+                side: { type: string, enum: [BUY, SELL] }
+                type: { type: string, enum: [MARKET, LIMIT, STOP_MARKET] }
+                quantity: { type: number }
+                price: { type: number }
+                stopPrice: { type: number }
+  /api/v3/orderList/oco:
+    post:
+      summary: Place OCO order (TP + SL pair)
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [symbol, side, quantity, price, stopPrice, stopLimitPrice]
+              properties:
+                symbol: { type: string }
+                side: { type: string, enum: [BUY, SELL] }
+                quantity: { type: number }
+                price: { type: number }
+                stopPrice: { type: number }
+                stopLimitPrice: { type: number }
+  /api/v3/order/cancelReplace:
+    delete:
+      summary: Cancel an existing order
+  /api/v3/account:
+    get:
+      summary: Get account balances
+  /fapi/v2/positionRisk:
+    get:
+      summary: Get futures open positions

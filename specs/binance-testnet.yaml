@@ -1,0 +1,27 @@
+# specs/binance-testnet.yaml
+openapi: "3.0.3"
+info:
+  title: Binance REST API (Testnet)
+  version: "1.0"
+servers:
+  - url: https://testnet.binance.vision
+    description: Binance Spot Testnet
+  - url: https://testnet.binancefuture.com
+    description: Binance Futures Testnet
+paths:
+  # Same paths as mainnet — only base URL differs.
+  # Managed via Postman environment variables:
+  #   BINANCE_BASE_URL  →  mainnet or testnet server URL
+  #   BINANCE_API_KEY   →  environment-specific key
+  /api/v3/klines:
+    get:
+      summary: Fetch OHLCV (testnet)
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema: { type: string }
+        - name: interval
+          in: query
+          required: true
+          schema: { type: string }
