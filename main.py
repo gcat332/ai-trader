@@ -101,32 +101,33 @@ async def run():
             consecutive_failures = 0
 
             while True:
-                # UTC midnight daily reset — resets daily loss limit
-                today = date.today()
-                if today != last_reset_date:
-                    bal = await exchange.get_balance()
-                    risk_manager.reset_daily(bal.get("USDT", 0.0))
-                    last_reset_date = today
-
-                if not engine.is_running:
-                    await asyncio.sleep(10)
-                    continue
-
+                # Whole loop body is wrapped so any transient failure (balance fetch,
+                # daily reset, OHLCV fetch, processing) is caught and counted — the loop
+                # is self-healing and never propagates an exception that would tear down
+                # the gathered uvicorn server.
                 try:
-                    candles = await fetcher.fetch_ohlcv("BTC/USDT", "1h", limit=100)
-                    # Mark-to-market equity = free USDT + value of open positions at the
-                    # latest close. We use equity (not free USDT alone) because an open
-                    # position's unrealized loss must count toward the daily drawdown —
-                    # otherwise the 3% circuit breaker would never see intraday losses
-                    # that are still sitting in open positions.
-                    bal = await exchange.get_balance()
-                    positions = await exchange.get_positions()
-                    last_close = float(candles[-1][4]) if candles else 0.0
-                    equity = bal.get("USDT", 0.0) + sum(p.quantity * last_close for p in positions)
-                    risk_manager.record_current_balance(equity)
+                    # UTC midnight daily reset — resets daily loss limit
+                    today = date.today()
+                    if today != last_reset_date:
+                        bal = await exchange.get_balance()
+                        risk_manager.reset_daily(bal.get("USDT", 0.0))
+                        last_reset_date = today
 
-                    await engine.process_candles(candles)
-                    consecutive_failures = 0
+                    if engine.is_running:
+                        candles = await fetcher.fetch_ohlcv("BTC/USDT", "1h", limit=100)
+                        # Mark-to-market equity = free USDT + value of open positions at the
+                        # latest close. We use equity (not free USDT alone) because an open
+                        # position's unrealized loss must count toward the daily drawdown —
+                        # otherwise the 3% circuit breaker would never see intraday losses
+                        # that are still sitting in open positions.
+                        bal = await exchange.get_balance()
+                        positions = await exchange.get_positions()
+                        last_close = float(candles[-1][4]) if candles else 0.0
+                        equity = bal.get("USDT", 0.0) + sum(p.quantity * last_close for p in positions)
+                        risk_manager.record_current_balance(equity)
+
+                        await engine.process_candles(candles)
+                        consecutive_failures = 0
                 except Exception as e:
                     consecutive_failures += 1
                     logger.error(f"Engine loop error (attempt {consecutive_failures}): {e}")
@@ -134,14 +135,19 @@ async def run():
                         await notifier.send("⚠️ Data feed lost — 5 consecutive failures, trading paused")
                         engine.is_running = False
 
-                await asyncio.sleep(3600)  # run once per closed hourly candle
+                # Poll faster while paused so /resume takes effect quickly; otherwise
+                # run once per closed hourly candle.
+                await asyncio.sleep(10 if not engine.is_running else 3600)
 
         config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="warning")
         server = uvicorn.Server(config)
 
+        # return_exceptions=True so a fatal error in one task does not cancel the other
+        # (e.g. the trading loop dying must not take the dashboard API down with it).
         await asyncio.gather(
             trading_loop(),
             server.serve(),
+            return_exceptions=True,
         )
 
         if notifier:
