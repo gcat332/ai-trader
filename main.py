@@ -142,7 +142,7 @@ async def run():
             await notifier.start()
             logger.info("Telegram bot started")
 
-        app = create_app(repo)
+        app = create_app(repo, exchange=exchange)
 
         async def trading_loop():
             from datetime import date
