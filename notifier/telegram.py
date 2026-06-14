@@ -47,6 +47,39 @@ def format_order_alert(order: Order, entry_price: float, realized_pnl: float) ->
     )
 
 
+def format_drift_alert(event: "DriftEvent") -> str:
+    return (
+        f"⚠️ Strategy Drift Detected\n"
+        f"Win rate (last 30): {event.win_rate_30:.1%}  |  "
+        f"Calibration: {event.calibration_score:.2f}\n"
+        f"Reason: {event.reason}\n"
+        f"Retraining model now..."
+    )
+
+
+def format_retrain_complete(holdout_accuracy: float, model_id: str) -> str:
+    return (
+        f"🔄 Model Retrain Complete\n"
+        f"Model ID: {model_id}\n"
+        f"Holdout accuracy: {holdout_accuracy:.1%}\n"
+        f"Running A/B test (shadow mode)..."
+    )
+
+
+def format_ab_result(result: "ABTestResult") -> str:
+    if result.outcome == "CHALLENGER_APPLIED":
+        emoji = "✅"
+        action = f"Challenger APPLIED (improvement: {(result.challenger_win_rate - result.champion_win_rate):+.1%})"
+    else:
+        emoji = "🔄"
+        action = f"Champion retained (no significant improvement)"
+    return (
+        f"{emoji} A/B Test Complete  [run={result.run_id}]\n"
+        f"Champion: {result.champion_win_rate:.1%}  →  Challenger: {result.challenger_win_rate:.1%}\n"
+        f"p-value: {result.p_value:.4f}  |  {action}"
+    )
+
+
 class TelegramNotifier:
 
     def __init__(self, token: str, chat_id: str, controller: EngineController):
@@ -89,6 +122,18 @@ class TelegramNotifier:
 
         text = format_daily_summary(total, placed, rejected, hold, breakdown)
         await self.send(text)
+
+    async def send_drift_alert(self, event) -> None:
+        from notifier.telegram import format_drift_alert
+        await self.send(format_drift_alert(event))
+
+    async def send_retrain_complete(self, holdout_accuracy: float, model_id: str) -> None:
+        from notifier.telegram import format_retrain_complete
+        await self.send(format_retrain_complete(holdout_accuracy, model_id))
+
+    async def send_ab_result(self, result) -> None:
+        from notifier.telegram import format_ab_result
+        await self.send(format_ab_result(result))
 
     # ── Command handlers ──────────────────────────────────────────────────
 

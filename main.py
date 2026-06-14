@@ -12,6 +12,7 @@ import aiosqlite
 import uvicorn
 
 from core.config import Settings
+from core.drift_monitor import DriftDetector
 from core.engine import Engine
 from core.live_controller import LiveEngineController
 from data.fetcher import DataFetcher
@@ -19,12 +20,20 @@ from db.schema import init_db
 from db.repository import Repository
 from exchange.binance import BinanceExchange
 from exchange.paper import PaperExchange
+from ml.ab_tester import ModelABTester
+from ml.retrainer import ModelRetrainer
 from notifier.logger import get_logger
 from notifier.telegram import TelegramNotifier
 from risk.manager import RiskManager
 from strategy.ml.dummy_model import DummyModel
 from strategy.rsi_macd import RsiMacdStrategy
 from api.main import create_app
+
+
+def _cooldown_elapsed(last_retrain_iso: str, days: int) -> bool:
+    from datetime import datetime, timedelta
+    last = datetime.fromisoformat(last_retrain_iso)
+    return (datetime.utcnow() - last) >= timedelta(days=days)
 
 
 async def run():
@@ -50,6 +59,16 @@ async def run():
         logger.info(f"Starting in LIVE mode ({mode})")
 
     strategy = RsiMacdStrategy(ml_model=DummyModel(confidence=0.8))
+
+    drift_detector = DriftDetector(
+        win_rate_threshold=float(os.getenv("DRIFT_WIN_RATE_THRESHOLD", "0.40")),
+        calibration_threshold=float(os.getenv("DRIFT_CALIBRATION_THRESHOLD", "0.20")),
+        min_samples=int(os.getenv("DRIFT_MIN_SAMPLES", "30")),
+    )
+    retrainer = ModelRetrainer(
+        min_samples=int(os.getenv("RETRAIN_MIN_SAMPLES", "50")),
+        models_dir=os.getenv("MODELS_DIR", "models"),
+    )
 
     # ONE shared RiskManager for all engines — enforces portfolio-level limits
     risk_manager = RiskManager(
@@ -129,6 +148,33 @@ async def run():
 
                         await engine.process_candles(candles)
                         consecutive_failures = 0
+
+                        # Drift check every N candles (configurable via DRIFT_CHECK_INTERVAL env var)
+                        _drift_tick = getattr(trading_loop, "_drift_tick", 0) + 1
+                        trading_loop._drift_tick = _drift_tick
+
+                        drift_interval = int(os.getenv("DRIFT_CHECK_INTERVAL", "10"))
+                        if _drift_tick % drift_interval == 0:
+                            event = await drift_detector.check(repo)
+                            if event is not None:
+                                if notifier:
+                                    await notifier.send_drift_alert(event)
+
+                                # Check 7-day retrain cooldown
+                                last_retrain = await repo.get_last_retrain_time()
+                                if last_retrain is None or _cooldown_elapsed(last_retrain, days=7):
+                                    model = await retrainer.retrain(repo)
+                                    if model is not None:
+                                        if notifier:
+                                            await notifier.send_retrain_complete(
+                                                model.holdout_accuracy, getattr(model, "model_id", "unknown")
+                                            )
+                                        ab_tester = ModelABTester(
+                                            champion=strategy.ml_model,
+                                            challenger=model,
+                                            min_trades=int(os.getenv("AB_MIN_TRADES", "50")),
+                                        )
+                                        engine._ab_tester = ab_tester
                 except Exception as e:
                     consecutive_failures += 1
                     logger.error(f"Engine loop error (attempt {consecutive_failures}): {e}")

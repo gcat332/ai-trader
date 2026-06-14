@@ -24,12 +24,21 @@ class RsiMacdStrategy(BaseStrategy):
     ):
         self._model = ml_model
         self._rsi_period = rsi_period
+
         self._rsi_oversold = rsi_oversold
         self._rsi_overbought = rsi_overbought
         self._confidence_threshold = confidence_threshold
         self._tp_pct = tp_pct
         self._sl_pct = sl_pct
         self._adx_threshold = adx_trend_threshold
+
+    @property
+    def ml_model(self):
+        return self._model
+
+    @ml_model.setter
+    def ml_model(self, model) -> None:
+        self._model = model
 
     def on_candle(self, symbol: str, ohlcv: pd.DataFrame) -> Signal:
         close = ohlcv["close"]
