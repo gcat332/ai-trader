@@ -29,3 +29,7 @@ models/*.pkl
 .DS_Store
 .idea/
 .vscode/
+
+# Frontend
+node_modules/
+dashboard/dist/
