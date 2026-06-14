@@ -59,18 +59,19 @@ async def run():
         confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.6")),
     )
 
-    engine = Engine(
-        exchange=exchange,
-        strategy=strategy,
-        symbol="BTC/USDT",
-        timeframe="1h",
-        risk_manager=risk_manager,
-    )
-    engine.is_running = True
-
     async with aiosqlite.connect("db/trades.db") as conn:
         await init_db(conn)
         repo = Repository(conn)
+
+        engine = Engine(
+            exchange=exchange,
+            strategy=strategy,
+            symbol="BTC/USDT",
+            timeframe="1h",
+            risk_manager=risk_manager,
+            repo=repo,
+        )
+        engine.is_running = True
 
         balance = await exchange.get_balance()
         daily_start = balance.get("USDT", 10000.0)
