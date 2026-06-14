@@ -92,4 +92,18 @@ async def init_db(conn: aiosqlite.Connection) -> None:
             exit_reason          TEXT NOT NULL
         )
     """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ab_test_runs (
+            id                   TEXT PRIMARY KEY,
+            start_time           TEXT NOT NULL,
+            end_time             TEXT,
+            champion_id          TEXT NOT NULL,
+            challenger_id        TEXT NOT NULL,
+            champion_win_rate    REAL,
+            challenger_win_rate  REAL,
+            p_value              REAL,
+            outcome              TEXT,
+            notes                TEXT
+        )
+    """)
     await conn.commit()

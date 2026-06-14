@@ -149,3 +149,45 @@ def test_format_daily_summary():
     assert "15" in text
     assert "4" in text
     assert "placed" in text.lower() or "PLACED" in text
+
+
+def test_format_drift_alert():
+    from notifier.telegram import format_drift_alert
+    from core.drift_monitor import DriftEvent
+    event = DriftEvent(
+        win_rate_30=0.32,
+        calibration_score=0.15,
+        total_outcomes=28,
+        reason="win_rate=32.0% < threshold=40.0%",
+    )
+    text = format_drift_alert(event)
+    assert "32" in text or "32.0" in text
+    assert "drift" in text.lower() or "performance" in text.lower()
+
+
+def test_format_ab_result_applied():
+    from notifier.telegram import format_ab_result
+    from ml.ab_tester import ABTestResult
+    from ml.base_model import BaseMLModel
+
+    class Dummy(BaseMLModel):
+        def predict(self, f): return 0.7
+
+    result = ABTestResult(
+        run_id="ab-001",
+        champion_win_rate=0.55,
+        challenger_win_rate=0.68,
+        p_value=0.022,
+        outcome="CHALLENGER_APPLIED",
+        applied_model=Dummy(),
+    )
+    text = format_ab_result(result)
+    assert "applied" in text.lower() or "APPLIED" in text
+    assert "0.022" in text or "p=" in text
+
+
+def test_format_retrain_complete():
+    from notifier.telegram import format_retrain_complete
+    text = format_retrain_complete(holdout_accuracy=0.72, model_id="logreg_20260112")
+    assert "72" in text or "72%" in text
+    assert "retrain" in text.lower() or "model" in text.lower()

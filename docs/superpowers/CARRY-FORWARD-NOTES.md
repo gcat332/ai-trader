@@ -93,12 +93,19 @@ Status legend: ⬜ open · ✅ done
 
 ## → Phase 9 (Self-Improvement) and later
 
-- ⬜ **Live outcome-recording gap (Important for Phase 9).** `engine.record_trade_outcome` is wired in
-  the BacktestRunner, but NOT in `main.py`'s live/paper loop — live positions close via OCO on the
-  exchange, not via `tick()`. So in live/paper mode the `signal_outcomes` table stays empty and
-  `DriftDetector` (Phase 9) has no live data to act on. Wire outcome detection into the live loop
-  (poll closed positions / OCO fills → `record_trade_outcome`) so self-improvement works live.
-  Found: Phase 8 review.
+- ⬜ **Live outcome-recording gap (Important — gates live self-improvement).** `engine.record_trade_outcome`
+  is wired in the BacktestRunner, but NOT in `main.py`'s live/paper loop — live positions close via OCO
+  on the exchange, not via `tick()`. So in live/paper mode the `signal_outcomes` table stays empty,
+  `DriftDetector` has no live data, AND the Phase-9 A/B loop never accumulates outcomes (works in
+  backtest only). Wire outcome detection into the live loop (poll closed positions / OCO fills →
+  `record_trade_outcome`) so drift detection + A/B auto-apply actually run live. Found: Phase 8/9 reviews.
+
+- ⬜ **A/B challenger PnL is a first-order approximation (Note).** Phase 9's `ModelABTester` scores the
+  challenger only on trades the CHAMPION placed (challenger "takes" them iff its entry confidence ≥
+  threshold; skipped → 0 PnL). It cannot reward a challenger for trades the champion skipped but the
+  challenger would have taken. Proper A/B needs SHADOW EXECUTION (both models as independent paper
+  books). Wired + tested end-to-end (champion retained vs challenger applied), guardrails intact;
+  upgrade to shadow execution when full autonomy is needed. Found: Phase 9 review.
 
 - ⬜ **`datetime.utcnow()` deprecation sweep (cleanup).** Many modules use the deprecated
   `datetime.utcnow()` (naive). Migrate to `datetime.now(timezone.utc)` codebase-wide in one careful

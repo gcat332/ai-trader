@@ -18,6 +18,7 @@ class Engine:
         timeframe: str,
         risk_manager: RiskManager | None = None,
         repo=None,
+        ab_tester=None,
     ):
         self.exchange = exchange
         self.strategy = strategy
@@ -25,9 +26,27 @@ class Engine:
         self.timeframe = timeframe
         self._risk_manager = risk_manager
         self._repo = repo
+        self._ab_tester = ab_tester
         self.is_running: bool = True
-        # Maps symbol → (decision_id, confidence) for outcome tracking
-        self._active_decisions: dict[str, tuple[str, float]] = {}
+        # Maps symbol → (decision_id, confidence, challenger_conf) for outcome
+        # tracking. challenger_conf is the A/B challenger's confidence at entry
+        # (None when no ab_tester), paired back at close to score the challenger.
+        self._active_decisions: dict[str, tuple[str, float, float | None]] = {}
+
+    def _build_features(self, df) -> dict[str, float]:
+        volume = df["volume"] if "volume" in df.columns else None
+        vol_ratio = 1.0
+        if volume is not None and len(volume) >= 20:
+            avg = float(volume.iloc[-20:].mean())
+            if avg > 0:
+                vol_ratio = float(volume.iloc[-1]) / avg
+        return {
+            "rsi": 0.0,
+            "macd": 0.0,
+            "adx": 0.0,
+            "volume_ratio": vol_ratio,
+            "confidence": 0.5,
+        }
 
     async def process_candles(self, raw_candles: list[list]) -> None:
         df = pd.DataFrame(
@@ -35,6 +54,12 @@ class Engine:
             columns=["timestamp", "open", "high", "low", "close", "volume"],
         )
         current_price = float(df["close"].iloc[-1])
+
+        challenger_conf: float | None = None
+        if self._ab_tester is not None:
+            features = self._build_features(df)
+            _, challenger_conf = self._ab_tester.shadow_evaluate(features)
+
         signal: Signal = self.strategy.on_candle(self.symbol, df)
 
         if signal.side == "HOLD":
@@ -61,7 +86,11 @@ class Engine:
 
         if order is not None:
             decision_id = await self._log_decision(signal, "PLACED", None)
-            self._active_decisions[signal.symbol] = (decision_id, signal.confidence)
+            self._active_decisions[signal.symbol] = (
+                decision_id,
+                signal.confidence,
+                challenger_conf,
+            )
             await self.exchange.place_order(order, current_price=current_price)
             if hasattr(self.exchange, "set_position_tp_sl"):
                 self.exchange.set_position_tp_sl(
@@ -79,7 +108,7 @@ class Engine:
         entry = self._active_decisions.pop(trade.symbol, None)
         if entry is None:
             return
-        decision_id, confidence = entry
+        decision_id, confidence, challenger_conf = entry
         from core.models import SignalOutcome
         hold_hours = 0.0
         if trade.exit_time and trade.entry_time:
@@ -94,6 +123,13 @@ class Engine:
             exit_reason=trade.exit_reason,
         )
         await self._repo.insert_signal_outcome(outcome)
+
+        if self._ab_tester is not None:
+            self._ab_tester.record_outcome(
+                trade.exit_reason if trade.exit_reason == "TP" else "LOSS" if trade.realized_pnl < 0 else "WIN",
+                trade.realized_pnl,
+                challenger_entry_conf=challenger_conf,
+            )
 
     async def _log_decision(
         self, signal: Signal, final_decision: str, rejection_reason: str | None

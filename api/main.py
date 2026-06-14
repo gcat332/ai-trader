@@ -91,6 +91,23 @@ def create_app(repo: Repository) -> FastAPI:
         metrics = await repo.get_decision_metrics(limit=limit)
         return metrics
 
+    @app.get("/api/health/strategy")
+    async def get_strategy_health():
+        metrics = await repo.get_decision_metrics(limit=30)
+        from core.drift_monitor import DriftDetector
+        detector = DriftDetector()
+        calibration = await detector._compute_calibration(repo)
+        return {
+            "win_rate_30": metrics["win_rate"],
+            "total_outcomes": metrics["total"],
+            "avg_pnl": metrics["avg_pnl"],
+            "confidence_calibration": calibration,
+        }
+
+    @app.get("/api/ab-tests")
+    async def get_ab_tests(limit: int = 20):
+        return await repo.get_ab_test_history(limit=limit)
+
     @app.websocket("/ws/feed")
     async def websocket_feed(websocket: WebSocket):
         await websocket.accept()

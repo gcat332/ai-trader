@@ -1,16 +1,18 @@
 // dashboard/src/App.tsx
 import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
-import { BarChart2, Clock, FlaskConical, GitCompare, Search, Bell, Mail } from "lucide-react";
+import { BarChart2, Clock, FlaskConical, GitCompare, Search, Bell, Mail, Activity } from "lucide-react";
 import LiveTrading from "./pages/LiveTrading";
 import TradeHistory from "./pages/TradeHistory";
 import Backtest from "./pages/Backtest";
 import Compare from "./pages/Compare";
+import StrategyHealth from "./pages/StrategyHealth";
 
 const navItems = [
   { to: "/", label: "Live", icon: BarChart2, end: true },
   { to: "/history", label: "History", icon: Clock, end: false },
   { to: "/backtest", label: "Backtest", icon: FlaskConical, end: false },
   { to: "/compare", label: "Compare", icon: GitCompare, end: false },
+  { to: "/health", label: "Health", icon: Activity, end: false },
 ];
 
 export default function App() {
@@ -92,6 +94,7 @@ export default function App() {
               <Route path="/history" element={<TradeHistory />} />
               <Route path="/backtest" element={<Backtest />} />
               <Route path="/compare" element={<Compare />} />
+              <Route path="/health" element={<StrategyHealth />} />
             </Routes>
           </main>
         </div>

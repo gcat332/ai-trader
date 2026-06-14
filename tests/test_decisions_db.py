@@ -105,3 +105,50 @@ async def test_get_decisions_filter_by_symbol(repo):
     btc_rows = await repo.get_decisions(symbol="BTC/USDT", limit=10)
     assert len(btc_rows) == 2
     assert all(r["symbol"] == "BTC/USDT" for r in btc_rows)
+
+
+@pytest.mark.asyncio
+async def test_insert_and_get_ab_test_run(repo):
+    run = {
+        "id": "ab-001",
+        "start_time": datetime(2026, 1, 1, 0, 0).isoformat(),
+        "end_time": datetime(2026, 1, 4, 0, 0).isoformat(),
+        "champion_id": "model_v1",
+        "challenger_id": "model_v2",
+        "champion_win_rate": 0.60,
+        "challenger_win_rate": 0.68,
+        "p_value": 0.031,
+        "outcome": "CHALLENGER_APPLIED",
+        "notes": "Challenger improved by 13%",
+    }
+    await repo.insert_ab_test_run(run)
+    history = await repo.get_ab_test_history(limit=10)
+    assert len(history) == 1
+    assert history[0]["outcome"] == "CHALLENGER_APPLIED"
+    assert history[0]["p_value"] == pytest.approx(0.031)
+
+
+@pytest.mark.asyncio
+async def test_get_last_retrain_time_none_when_empty(repo):
+    ts = await repo.get_last_retrain_time()
+    assert ts is None
+
+
+@pytest.mark.asyncio
+async def test_get_last_retrain_time_after_run(repo):
+    run = {
+        "id": "ab-002",
+        "start_time": datetime(2026, 2, 1).isoformat(),
+        "end_time": datetime(2026, 2, 4).isoformat(),
+        "champion_id": "model_v1",
+        "challenger_id": "model_v2",
+        "champion_win_rate": 0.55,
+        "challenger_win_rate": 0.52,
+        "p_value": 0.32,
+        "outcome": "CHAMPION_RETAINED",
+        "notes": "Not statistically significant",
+    }
+    await repo.insert_ab_test_run(run)
+    ts = await repo.get_last_retrain_time()
+    assert ts is not None
+    assert "2026-02-01" in ts
