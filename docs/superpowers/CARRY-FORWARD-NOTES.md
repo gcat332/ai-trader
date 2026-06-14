@@ -84,10 +84,28 @@ Status legend: ⬜ open · ✅ done
 
 ## → Phase 8 (Decision Log / rejection reasons)
 
-- ⬜ **Gate order masks rejection reason (note).** In `RiskManager.evaluate`, the confidence-threshold
-  gate is checked BEFORE the structural gates (SELL-no-position, re-entry, correlation). A
-  low-confidence SELL on an unowned symbol is rejected with reason "low_confidence" rather than the
-  more precise "sell_no_position". Functionally identical today (all return None), but when Phase 8
-  logs WHY a signal was rejected, reorder so structural/eligibility gates precede the confidence
-  gate — OR collect all failing reasons instead of short-circuiting on the first.
-  (The Phase 8 plan's `evaluate` rewrite should bake in the correct order.) Found: Phase 2 review.
+- ✅ **Gate order masks rejection reason.** DONE in Phase 8: `RiskManager.evaluate` now checks
+  `low_confidence` LAST (after structural/eligibility gates), so a low-confidence SELL on an unowned
+  symbol reports "sell_no_position", not "low_confidence". Verified live in review.
+  Found: Phase 2; fixed: Phase 8.
+
+---
+
+## → Phase 9 (Self-Improvement) and later
+
+- ⬜ **Live outcome-recording gap (Important for Phase 9).** `engine.record_trade_outcome` is wired in
+  the BacktestRunner, but NOT in `main.py`'s live/paper loop — live positions close via OCO on the
+  exchange, not via `tick()`. So in live/paper mode the `signal_outcomes` table stays empty and
+  `DriftDetector` (Phase 9) has no live data to act on. Wire outcome detection into the live loop
+  (poll closed positions / OCO fills → `record_trade_outcome`) so self-improvement works live.
+  Found: Phase 8 review.
+
+- ⬜ **`datetime.utcnow()` deprecation sweep (cleanup).** Many modules use the deprecated
+  `datetime.utcnow()` (naive). Migrate to `datetime.now(timezone.utc)` codebase-wide in one careful
+  pass (watch for naive-vs-aware comparison/isoformat changes, e.g. `exit_time - entry_time`).
+  Deferred repeatedly since Phase 1. Found: multiple reviews.
+
+- ⬜ **Multi-symbol limitations (Note).** `BacktestRunner` uses `get_trade_log()[-1]` and the engine's
+  `_active_decisions[symbol]` is overwritten on re-entry — both correct only because the single-symbol
+  re-entry guard prevents concurrent same-symbol positions. Revisit if multi-symbol/multi-position
+  support is added. Found: Phase 8 review.
