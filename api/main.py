@@ -1,0 +1,94 @@
+# api/main.py
+import asyncio
+import json
+from datetime import date
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from db.repository import Repository
+from api import bus
+
+
+def create_app(repo: Repository) -> FastAPI:
+    app = FastAPI(title="AI Trader API")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app.get("/api/positions")
+    async def get_positions():
+        return await repo.get_trade_history()  # open positions would come from live engine state
+
+    @app.get("/api/orders")
+    async def get_orders(symbol: str | None = None):
+        return await repo.get_orders(symbol=symbol)
+
+    @app.get("/api/pnl")
+    async def get_pnl():
+        trades = await repo.get_trade_history()
+        total = sum(t.get("realized_pnl", 0) or 0 for t in trades)
+        today_trades = [t for t in trades if t.get("exit_time", "")[:10] == date.today().isoformat()]
+        daily = sum(t.get("realized_pnl", 0) or 0 for t in today_trades)
+        return {"total": total, "daily": daily}
+
+    @app.get("/api/strategies")
+    async def get_strategies():
+        return [{"id": "rsi_macd", "status": "stopped"}]
+
+    @app.post("/api/strategies/{strategy_id}/start")
+    async def start_strategy(strategy_id: str):
+        return {"id": strategy_id, "status": "started"}
+
+    @app.post("/api/strategies/{strategy_id}/stop")
+    async def stop_strategy(strategy_id: str):
+        return {"id": strategy_id, "status": "stopped"}
+
+    @app.get("/api/trades/history")
+    async def get_trade_history(
+        symbol: str | None = None,
+        strategy_id: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ):
+        return await repo.get_trade_history(
+            symbol=symbol, strategy_id=strategy_id,
+            from_date=from_date, to_date=to_date,
+        )
+
+    @app.get("/api/backtest/history")
+    async def get_backtest_history():
+        return await repo.get_backtest_history()
+
+    @app.get("/api/backtest/{run_id}")
+    async def get_backtest_run(run_id: str):
+        run = await repo.get_backtest_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Backtest run not found")
+        return run
+
+    @app.post("/api/backtest/run")
+    async def trigger_backtest(body: dict):
+        return {"status": "queued", "run_id": "placeholder"}
+
+    @app.get("/api/compare")
+    async def compare(strategy: str, from_date: str | None = None, to_date: str | None = None):
+        live = await repo.get_trade_history(strategy_id=strategy, from_date=from_date, to_date=to_date)
+        backtest = await repo.get_backtest_history()
+        return {"live_trades": live, "backtest_runs": backtest}
+
+    @app.websocket("/ws/feed")
+    async def websocket_feed(websocket: WebSocket):
+        await websocket.accept()
+        q = bus.subscribe()
+        try:
+            while True:
+                event = await asyncio.wait_for(q.get(), timeout=30.0)
+                await websocket.send_text(json.dumps(event))
+        except (WebSocketDisconnect, asyncio.TimeoutError):
+            pass
+        finally:
+            bus.unsubscribe(q)
+
+    return app
