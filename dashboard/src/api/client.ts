@@ -52,3 +52,61 @@ export const useStartStrategy = () =>
 
 export const useStopStrategy = () =>
   useMutation({ mutationFn: (id: string) => api.post(`/strategies/${id}/stop`) });
+
+export type Decision = {
+  id: string;
+  timestamp: string;
+  symbol: string;
+  strategy_id: string;
+  signal_side: string;
+  confidence: number;
+  narrative: string;
+  final_decision: string;
+  rejection_reason: string | null;
+  entry_price: number;
+};
+
+export interface StrategyHealth {
+  win_rate_30: number;
+  total_outcomes: number;
+  avg_pnl: number;
+  confidence_calibration: number;
+}
+
+export interface ABTestRun {
+  id: string;
+  start_time: string;
+  end_time: string | null;
+  champion_id: string;
+  challenger_id: string;
+  champion_win_rate: number | null;
+  challenger_win_rate: number | null;
+  p_value: number | null;
+  outcome: string | null;
+  notes: string | null;
+}
+
+export function useDecisionLog(limit = 50) {
+  return useQuery<Decision[]>({
+    queryKey: ["decisions", limit],
+    queryFn: () =>
+      api.get("/decisions", { params: { limit } }).then((r) => r.data.decisions),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useStrategyHealth() {
+  return useQuery<StrategyHealth>({
+    queryKey: ["strategy-health"],
+    queryFn: () => fetch("/api/health/strategy").then((r) => r.json()),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useABTests() {
+  return useQuery<ABTestRun[]>({
+    queryKey: ["ab-tests"],
+    queryFn: () => fetch("/api/ab-tests").then((r) => r.json()),
+    refetchInterval: 120_000,
+  });
+}
