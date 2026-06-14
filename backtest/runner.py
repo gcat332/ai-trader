@@ -15,12 +15,14 @@ class BacktestRunner:
         initial_balance: dict[str, float],
         symbol: str,
         timeframe: str = "1h",
+        repo=None,
     ):
         self._strategy = strategy
         self._risk_manager = risk_manager
         self._initial_balance = initial_balance
         self._symbol = symbol
         self._timeframe = timeframe
+        self._repo = repo
 
     async def run(self, candles: list[list]) -> list[TradeRecord]:
         """
@@ -35,19 +37,19 @@ class BacktestRunner:
             symbol=self._symbol,
             timeframe=self._timeframe,
             risk_manager=self._risk_manager,
+            repo=self._repo,
         )
 
         for i, candle in enumerate(candles):
-            window = candles[max(0, i - 99): i + 1]  # rolling 100-candle window for indicators
+            window = candles[max(0, i - 99): i + 1]
             await engine.process_candles(window)
 
-            # Apply TP/SL from the signal to the just-opened position
-            positions = await exchange.get_positions()
-            for pos in positions:
-                if pos.take_profit is None and pos.stop_loss is None:
-                    pass  # already set by strategy via set_position_tp_sl or default
-
             _, high, low, close = candle[1], candle[2], candle[3], candle[4]
-            await exchange.tick(self._symbol, high=high, low=low, close=close)
+            trade = await exchange.tick(self._symbol, high=high, low=low, close=close)
+            if trade is not None and hasattr(trade, "price"):
+                # Reconstruct TradeRecord for outcome tracking
+                pos_log = exchange.get_trade_log()
+                if pos_log:
+                    await engine.record_trade_outcome(pos_log[-1])
 
         return exchange.get_trade_log()
