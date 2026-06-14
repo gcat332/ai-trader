@@ -1,6 +1,7 @@
 # api/main.py
 import asyncio
 import json
+from datetime import date
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from db.repository import Repository
@@ -28,7 +29,7 @@ def create_app(repo: Repository) -> FastAPI:
     async def get_pnl():
         trades = await repo.get_trade_history()
         total = sum(t.get("realized_pnl", 0) or 0 for t in trades)
-        today_trades = [t for t in trades if t.get("exit_time", "")[:10] == __import__("datetime").date.today().isoformat()]
+        today_trades = [t for t in trades if t.get("exit_time", "")[:10] == date.today().isoformat()]
         daily = sum(t.get("realized_pnl", 0) or 0 for t in today_trades)
         return {"total": total, "daily": daily}
 

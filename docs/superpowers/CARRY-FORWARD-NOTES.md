@@ -29,7 +29,26 @@ Status legend: ⬜ open · ✅ done
 
 ---
 
+## → Phase 5 (Dashboard — when consuming the WS feed)
+
+- ⬜ **WebSocket idle disconnect (Important).** `api/main.py` `/ws/feed` breaks the loop and
+  disconnects the client on `asyncio.TimeoutError` (30s with no bus events), so an idle dashboard
+  gets dropped every 30s. When the dashboard consumes the feed, fix by sending a heartbeat/ping on
+  timeout and `continue`-ing instead of breaking. Found: Phase 4 review.
+
+---
+
 ## → Phase 7 (Binance live loop)
+
+- ⬜ **`/api/positions` returns CLOSED trades, not live open positions (Important, documented stub).**
+  `api/main.py` `/api/positions` returns `repo.get_trade_history()`. Wire it to live engine state
+  (actual open positions) in Phase 7. Found: Phase 4 review (plan-acknowledged stub).
+- ⬜ **`get_trade_history(strategy_id=...)` is a no-op filter.** The `positions` table has no
+  `strategy_id` column, so `/api/trades/history` and `/api/compare` silently ignore the strategy
+  filter. Add `strategy_id` to the trade/positions schema and wire the filter. Found: Phase 4 review.
+- ⬜ **CORS `allow_origins=["*"]` (Nit).** Lock to the dashboard origin in production. `api/main.py`.
+- ⬜ **Single shared aiosqlite connection (Note).** Safe but serial (aiosqlite serializes through one
+  thread). Consider connection handling if throughput becomes a concern. Found: Phase 4 review.
 
 - ⬜ **Daily-loss gate is dormant (Important, safety-critical).** `RiskManager._daily_loss_exceeded`
   reads `_current_balance`/`_daily_start_balance`, but nothing calls `record_current_balance()` /
