@@ -47,6 +47,19 @@ Status legend: ⬜ open · ✅ done
   `strategy_id` column, so `/api/trades/history` and `/api/compare` silently ignore the strategy
   filter. Add `strategy_id` to the trade/positions schema and wire the filter. Found: Phase 4 review.
 - ⬜ **CORS `allow_origins=["*"]` (Nit).** Lock to the dashboard origin in production. `api/main.py`.
+- ⬜ **TelegramNotifier.start() lifecycle order (Important, untested).** `notifier/telegram.py` `start()`
+  calls `await self._app.start()` BEFORE `await self._app.updater.start_polling()`. For
+  python-telegram-bot v22.8 the correct async-in-existing-loop order is
+  `initialize()` → `updater.start_polling()` → `start()`. Not caught by tests (start() is never
+  called — `_app` stays None). Fix AND verify against a real/test bot token when the bot is wired
+  into the main loop. Found: Phase 6 review.
+- ⬜ **`/close` symbol contract (Important).** `cmd_close` passes a BARE base asset (e.g. "BTC", not
+  "BTC/USDT") to `controller.close_position()`. Phase 7's `EngineController.close_position`
+  implementation must resolve the bare asset to the traded pair (or change the Telegram UX to
+  `/close BTC/USDT`). Found: Phase 6 review.
+- ⬜ **`TelegramNotifier.send()` silent no-op before start() (Nit).** When `_app is None`, `send()`
+  returns silently — messages dropped if `on_signal`/`on_order_filled` fire before `start()`.
+  Add a `logger.warning` once the logger is wired in the live loop. Found: Phase 6 review.
 - ⬜ **Single shared aiosqlite connection (Note).** Safe but serial (aiosqlite serializes through one
   thread). Consider connection handling if throughput becomes a concern. Found: Phase 4 review.
 
