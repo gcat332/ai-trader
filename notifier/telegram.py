@@ -7,11 +7,34 @@ def format_signal_alert(signal: Signal) -> str:
     emoji = "🟢" if signal.side == "BUY" else "🔴"
     tp = f"{signal.take_profit:,.0f}" if signal.take_profit else "—"
     sl = f"{signal.stop_loss:,.0f}" if signal.stop_loss else "—"
-    return (
+    text = (
         f"{emoji} {signal.side}  {signal.symbol} @ {signal.entry_price:,.0f}\n"
         f"TP: {tp}  |  SL: {sl}\n"
         f"Confidence: {signal.confidence:.0%}  |  Strategy: {signal.strategy_id}"
     )
+    if signal.narrative:
+        # Add abbreviated narrative (first 2 parts only to keep message short)
+        short = " | ".join(signal.narrative.split(" | ")[:2])
+        text += f"\n{short}"
+    return text
+
+
+def format_daily_summary(
+    total_evaluated: int,
+    placed: int,
+    rejected: int,
+    hold: int,
+    rejection_breakdown: dict[str, int],
+) -> str:
+    breakdown = ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in rejection_breakdown.items())
+    lines = [
+        f"📊 Daily Decision Summary",
+        f"Total evaluated: {total_evaluated}",
+        f"✅ Placed: {placed}  |  ⛔ Rejected: {rejected}  |  ⏸ Hold: {hold}",
+    ]
+    if breakdown:
+        lines.append(f"Rejections: {breakdown}")
+    return "\n".join(lines)
 
 
 def format_order_alert(order: Order, entry_price: float, realized_pnl: float) -> str:
@@ -46,6 +69,26 @@ class TelegramNotifier:
 
     async def on_daily_limit_hit(self) -> None:
         await self.send("⚠️ Daily loss limit reached — bot paused")
+
+    async def send_daily_summary(self, repo) -> None:
+        """Pull today's decisions from DB and send summary to Telegram."""
+        decisions = await repo.get_decisions(limit=200)
+        from datetime import date
+        today = date.today().isoformat()
+        today_decisions = [d for d in decisions if d["timestamp"][:10] == today]
+
+        total = len(today_decisions)
+        placed = sum(1 for d in today_decisions if d["final_decision"] == "PLACED")
+        rejected = sum(1 for d in today_decisions if d["final_decision"] == "REJECTED")
+        hold = total - placed - rejected
+
+        breakdown: dict[str, int] = {}
+        for d in today_decisions:
+            if d["final_decision"] == "REJECTED" and d["rejection_reason"]:
+                breakdown[d["rejection_reason"]] = breakdown.get(d["rejection_reason"], 0) + 1
+
+        text = format_daily_summary(total, placed, rejected, hold, breakdown)
+        await self.send(text)
 
     # ── Command handlers ──────────────────────────────────────────────────
 
