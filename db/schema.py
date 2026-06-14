@@ -68,4 +68,28 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     await conn.execute(CREATE_POSITIONS)
     await conn.execute(CREATE_SIGNALS)
     await conn.execute(CREATE_BACKTEST_RUNS)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS decisions (
+            id          TEXT PRIMARY KEY,
+            timestamp   TEXT NOT NULL,
+            symbol      TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            signal_side TEXT NOT NULL,
+            confidence  REAL NOT NULL,
+            narrative   TEXT NOT NULL,
+            final_decision TEXT NOT NULL,
+            rejection_reason TEXT,
+            entry_price REAL NOT NULL
+        )
+    """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS signal_outcomes (
+            decision_id          TEXT PRIMARY KEY,
+            predicted_confidence REAL NOT NULL,
+            actual_outcome       TEXT NOT NULL,
+            realized_pnl         REAL NOT NULL,
+            hold_duration_hours  REAL NOT NULL,
+            exit_reason          TEXT NOT NULL
+        )
+    """)
     await conn.commit()
