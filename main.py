@@ -28,12 +28,45 @@ from risk.manager import RiskManager
 from strategy.ml.dummy_model import DummyModel
 from strategy.rsi_macd import RsiMacdStrategy
 from api.main import create_app
+from strategy.base import BaseStrategy
 
 
 def _cooldown_elapsed(last_retrain_iso: str, days: int) -> bool:
     from datetime import datetime, timedelta
     last = datetime.fromisoformat(last_retrain_iso)
     return (datetime.utcnow() - last) >= timedelta(days=days)
+
+
+def _build_strategy() -> BaseStrategy:
+    mode = os.getenv("STRATEGY_MODE", "rule_based")
+    ml_model = DummyModel(confidence=float(os.getenv("ML_CONFIDENCE", "0.75")))
+    gatekeeper = RsiMacdStrategy(ml_model=ml_model)
+
+    match mode:
+        case "rule_based":
+            return gatekeeper
+
+        case "hybrid":
+            from strategy.ml.claude_strategy import ClaudeStrategy
+            from strategy.hybrid_strategy import HybridStrategy
+            validator = ClaudeStrategy(
+                model=os.getenv("CLAUDE_STRATEGY_MODEL"),
+                confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.60")),
+            )
+            return HybridStrategy(gatekeeper=gatekeeper, validator=validator)
+
+        case "claude_ai":
+            from strategy.ml.claude_strategy import ClaudeStrategy
+            return ClaudeStrategy(
+                model=os.getenv("CLAUDE_STRATEGY_MODEL"),
+                confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.60")),
+            )
+
+        case _:
+            raise ValueError(
+                f"Unknown STRATEGY_MODE={mode!r}. "
+                "Valid: rule_based, hybrid, claude_ai"
+            )
 
 
 async def run():
@@ -58,7 +91,7 @@ async def run():
         mode = "TESTNET" if settings.binance_testnet else "MAINNET"
         logger.info(f"Starting in LIVE mode ({mode})")
 
-    strategy = RsiMacdStrategy(ml_model=DummyModel(confidence=0.8))
+    strategy = _build_strategy()
 
     drift_detector = DriftDetector(
         win_rate_threshold=float(os.getenv("DRIFT_WIN_RATE_THRESHOLD", "0.40")),
@@ -155,52 +188,56 @@ async def run():
 
                         drift_interval = int(os.getenv("DRIFT_CHECK_INTERVAL", "10"))
 
-                        # If an A/B test is in progress, periodically evaluate it.
-                        # evaluate() is a no-op (returns None) until min_trades of
-                        # real champion outcomes have accumulated, so this is safe
-                        # to call every drift tick. When a winner is found we apply
-                        # it to the live strategy and conclude the A/B test.
-                        if engine._ab_tester is not None and _drift_tick % drift_interval == 0:
-                            result = await engine._ab_tester.evaluate(repo)
-                            if result is not None:
-                                if notifier:
-                                    await notifier.send_ab_result(result)
-                                if result.outcome == "CHALLENGER_APPLIED":
-                                    strategy.ml_model = result.applied_model
-                                    logger.info(
-                                        f"A/B challenger applied as new champion "
-                                        f"(win rate {result.challenger_win_rate:.1%} vs "
-                                        f"{result.champion_win_rate:.1%}, p={result.p_value:.4f})"
-                                    )
-                                else:
-                                    logger.info(
-                                        f"A/B champion retained (p={result.p_value:.4f})"
-                                    )
-                                # A/B concluded either way; stop shadowing until the
-                                # next drift→retrain cycle spins up a fresh challenger.
-                                engine._ab_tester = None
-
-                        if _drift_tick % drift_interval == 0:
-                            event = await drift_detector.check(repo)
-                            if event is not None:
-                                if notifier:
-                                    await notifier.send_drift_alert(event)
-
-                                # Check 7-day retrain cooldown
-                                last_retrain = await repo.get_last_retrain_time()
-                                if last_retrain is None or _cooldown_elapsed(last_retrain, days=7):
-                                    model = await retrainer.retrain(repo)
-                                    if model is not None:
-                                        if notifier:
-                                            await notifier.send_retrain_complete(
-                                                model.holdout_accuracy, getattr(model, "model_id", "unknown")
-                                            )
-                                        ab_tester = ModelABTester(
-                                            champion=strategy.ml_model,
-                                            challenger=model,
-                                            min_trades=int(os.getenv("AB_MIN_TRADES", "50")),
+                        # ML retrain + A/B test only applies when strategy has an ml_model
+                        # (i.e. rule_based / RsiMacdStrategy). HybridStrategy and
+                        # ClaudeStrategy do not expose ml_model — skip this block entirely.
+                        if hasattr(strategy, "ml_model"):
+                            # If an A/B test is in progress, periodically evaluate it.
+                            # evaluate() is a no-op (returns None) until min_trades of
+                            # real champion outcomes have accumulated, so this is safe
+                            # to call every drift tick. When a winner is found we apply
+                            # it to the live strategy and conclude the A/B test.
+                            if engine._ab_tester is not None and _drift_tick % drift_interval == 0:
+                                result = await engine._ab_tester.evaluate(repo)
+                                if result is not None:
+                                    if notifier:
+                                        await notifier.send_ab_result(result)
+                                    if result.outcome == "CHALLENGER_APPLIED":
+                                        strategy.ml_model = result.applied_model
+                                        logger.info(
+                                            f"A/B challenger applied as new champion "
+                                            f"(win rate {result.challenger_win_rate:.1%} vs "
+                                            f"{result.champion_win_rate:.1%}, p={result.p_value:.4f})"
                                         )
-                                        engine._ab_tester = ab_tester
+                                    else:
+                                        logger.info(
+                                            f"A/B champion retained (p={result.p_value:.4f})"
+                                        )
+                                    # A/B concluded either way; stop shadowing until the
+                                    # next drift→retrain cycle spins up a fresh challenger.
+                                    engine._ab_tester = None
+
+                            if _drift_tick % drift_interval == 0:
+                                event = await drift_detector.check(repo)
+                                if event is not None:
+                                    if notifier:
+                                        await notifier.send_drift_alert(event)
+
+                                    # Check 7-day retrain cooldown
+                                    last_retrain = await repo.get_last_retrain_time()
+                                    if last_retrain is None or _cooldown_elapsed(last_retrain, days=7):
+                                        model = await retrainer.retrain(repo)
+                                        if model is not None:
+                                            if notifier:
+                                                await notifier.send_retrain_complete(
+                                                    model.holdout_accuracy, getattr(model, "model_id", "unknown")
+                                                )
+                                            ab_tester = ModelABTester(
+                                                champion=strategy.ml_model,
+                                                challenger=model,
+                                                min_trades=int(os.getenv("AB_MIN_TRADES", "50")),
+                                            )
+                                            engine._ab_tester = ab_tester
                 except Exception as e:
                     consecutive_failures += 1
                     logger.error(f"Engine loop error (attempt {consecutive_failures}): {e}")
