@@ -24,15 +24,22 @@ class ModelABTester:
         min_trades: int = 50,
         improvement_threshold: float = 0.05,
         significance_level: float = 0.05,
+        confidence_threshold: float = 0.6,
     ):
         self._champion = champion
         self._challenger = challenger
         self._min_trades = min_trades
         self._improvement_threshold = improvement_threshold
         self._significance_level = significance_level
+        self._confidence_threshold = confidence_threshold
         self._outcomes: list[tuple[str, float]] = []  # (outcome, champion_pnl)
         self._champion_pnl: list[float] = []
         self._challenger_pnl: list[float] = []
+        # Per-trade flag: did the challenger's confidence gate let it take this
+        # trade? Skipped trades are not part of the challenger's trade set and so
+        # are excluded from its win-rate denominator (but still carried as 0.0 in
+        # _challenger_pnl for the mean-PnL t-test).
+        self._challenger_took: list[bool] = []
         self._shadow_count: int = 0
         self._start_time = datetime.utcnow()
         self._run_id = str(uuid.uuid4())[:8]
@@ -48,8 +55,39 @@ class ModelABTester:
         self._shadow_count += 1
         return champion_conf, challenger_conf
 
-    def record_outcome(self, outcome: str, realized_pnl: float) -> None:
+    def record_outcome(
+        self,
+        outcome: str,
+        realized_pnl: float,
+        challenger_entry_conf: float | None = None,
+    ) -> None:
+        """Record one CLOSED trade that the CHAMPION actually placed.
+
+        Challenger-PnL model (first-order simplification):
+        Both champion and challenger are confidence models gating the SAME
+        underlying RsiMacd signals. The A/B sample is the set of trades the
+        CHAMPION actually placed — those are the only ones with recorded
+        outcomes. For each such closed trade:
+          - the champion gets the trade's real ``realized_pnl``;
+          - the challenger "would have taken" that same trade iff its confidence
+            at entry was >= the confidence threshold, so it gets ``realized_pnl``
+            when ``challenger_entry_conf >= threshold`` and ``0.0`` otherwise
+            (the challenger skipped the trade → no gain/loss).
+        This measures whether the challenger's confidence gating improves trade
+        selection (skipping losers / keeping winners).
+
+        Limitation: it does NOT capture trades the champion skipped but the
+        challenger would have taken. Proper shadow execution (running both models
+        as independent paper books) is a future enhancement.
+        """
         self._outcomes.append((outcome, realized_pnl))
+        self._champion_pnl.append(realized_pnl)
+        took = (
+            challenger_entry_conf is not None
+            and challenger_entry_conf >= self._confidence_threshold
+        )
+        self._challenger_pnl.append(realized_pnl if took else 0.0)
+        self._challenger_took.append(took)
 
     async def evaluate(self, repo) -> "ABTestResult | None":
         """Run Welch's t-test once min_trades reached. Apply challenger if statistically better."""
@@ -63,8 +101,14 @@ class ModelABTester:
 
         wins_champion = sum(1 for o, _ in self._outcomes if o == "WIN")
         champion_win_rate = wins_champion / len(self._outcomes) if self._outcomes else 0.0
-        challenger_wins = sum(1 for p in self._challenger_pnl if p > 0)
-        challenger_win_rate = challenger_wins / len(self._challenger_pnl)
+        # Challenger win rate is measured over the trades it actually TOOK (gate
+        # passed); a skipped trade is not a challenger trade, so it does not dilute
+        # the win rate. With no taken trades the challenger has no edge to show.
+        challenger_taken = sum(1 for took in self._challenger_took if took)
+        challenger_wins = sum(
+            1 for p, took in zip(self._challenger_pnl, self._challenger_took) if took and p > 0
+        )
+        challenger_win_rate = challenger_wins / challenger_taken if challenger_taken else 0.0
 
         improvement = challenger_win_rate - champion_win_rate
         apply = (

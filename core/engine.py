@@ -28,8 +28,10 @@ class Engine:
         self._repo = repo
         self._ab_tester = ab_tester
         self.is_running: bool = True
-        # Maps symbol → (decision_id, confidence) for outcome tracking
-        self._active_decisions: dict[str, tuple[str, float]] = {}
+        # Maps symbol → (decision_id, confidence, challenger_conf) for outcome
+        # tracking. challenger_conf is the A/B challenger's confidence at entry
+        # (None when no ab_tester), paired back at close to score the challenger.
+        self._active_decisions: dict[str, tuple[str, float, float | None]] = {}
 
     def _build_features(self, df) -> dict[str, float]:
         volume = df["volume"] if "volume" in df.columns else None
@@ -53,9 +55,10 @@ class Engine:
         )
         current_price = float(df["close"].iloc[-1])
 
+        challenger_conf: float | None = None
         if self._ab_tester is not None:
             features = self._build_features(df)
-            self._ab_tester.shadow_evaluate(features)
+            _, challenger_conf = self._ab_tester.shadow_evaluate(features)
 
         signal: Signal = self.strategy.on_candle(self.symbol, df)
 
@@ -83,7 +86,11 @@ class Engine:
 
         if order is not None:
             decision_id = await self._log_decision(signal, "PLACED", None)
-            self._active_decisions[signal.symbol] = (decision_id, signal.confidence)
+            self._active_decisions[signal.symbol] = (
+                decision_id,
+                signal.confidence,
+                challenger_conf,
+            )
             await self.exchange.place_order(order, current_price=current_price)
             if hasattr(self.exchange, "set_position_tp_sl"):
                 self.exchange.set_position_tp_sl(
@@ -101,7 +108,7 @@ class Engine:
         entry = self._active_decisions.pop(trade.symbol, None)
         if entry is None:
             return
-        decision_id, confidence = entry
+        decision_id, confidence, challenger_conf = entry
         from core.models import SignalOutcome
         hold_hours = 0.0
         if trade.exit_time and trade.entry_time:
@@ -121,6 +128,7 @@ class Engine:
             self._ab_tester.record_outcome(
                 trade.exit_reason if trade.exit_reason == "TP" else "LOSS" if trade.realized_pnl < 0 else "WIN",
                 trade.realized_pnl,
+                challenger_entry_conf=challenger_conf,
             )
 
     async def _log_decision(

@@ -154,6 +154,32 @@ async def run():
                         trading_loop._drift_tick = _drift_tick
 
                         drift_interval = int(os.getenv("DRIFT_CHECK_INTERVAL", "10"))
+
+                        # If an A/B test is in progress, periodically evaluate it.
+                        # evaluate() is a no-op (returns None) until min_trades of
+                        # real champion outcomes have accumulated, so this is safe
+                        # to call every drift tick. When a winner is found we apply
+                        # it to the live strategy and conclude the A/B test.
+                        if engine._ab_tester is not None and _drift_tick % drift_interval == 0:
+                            result = await engine._ab_tester.evaluate(repo)
+                            if result is not None:
+                                if notifier:
+                                    await notifier.send_ab_result(result)
+                                if result.outcome == "CHALLENGER_APPLIED":
+                                    strategy.ml_model = result.applied_model
+                                    logger.info(
+                                        f"A/B challenger applied as new champion "
+                                        f"(win rate {result.challenger_win_rate:.1%} vs "
+                                        f"{result.champion_win_rate:.1%}, p={result.p_value:.4f})"
+                                    )
+                                else:
+                                    logger.info(
+                                        f"A/B champion retained (p={result.p_value:.4f})"
+                                    )
+                                # A/B concluded either way; stop shadowing until the
+                                # next drift→retrain cycle spins up a fresh challenger.
+                                engine._ab_tester = None
+
                         if _drift_tick % drift_interval == 0:
                             event = await drift_detector.check(repo)
                             if event is not None:
