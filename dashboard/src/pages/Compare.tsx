@@ -67,6 +67,10 @@ export default function Compare() {
               <span className="text-indigo-400">- -</span> Backtest
             </p>
             <EquityChart data={equityData} showBacktest />
+            {/* TODO: replace synthetic projection with real per-trade backtest equity from /api/compare */}
+            <p className="text-xs text-gray-400 mt-2">
+              Note: the backtest line is a linear projection of total PnL, not a per-trade equity curve.
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">

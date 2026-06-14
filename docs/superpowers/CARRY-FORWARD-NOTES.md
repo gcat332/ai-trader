@@ -10,16 +10,16 @@ Status legend: ⬜ open · ✅ done
 
 ## → Phase 5 (Dashboard / Compare page)
 
-- ⬜ **Backtest fee asymmetry (Important).** `PaperExchange.tick()` (TP/SL exit in `exchange/paper.py`)
-  credits `proceeds = hit_price * quantity` with **no fee deducted**, and computes
-  `realized_pnl = (hit_price - entry_price) * quantity` ignoring entry+exit fees — while the
-  live-parity `place_order` SELL path DOES deduct a 0.1% fee. Net effect: backtests overstate
-  profitability by ~2× fee rate per round-trip (~0.2% of notional) and understate drawdown.
-  This undermines the real-vs-backtest Compare page (equity curve / Sharpe / drawdown / win-rate).
-  **Fix before Compare page ships:** make `tick()` deduct exit fee and subtract entry+exit fees
-  from `realized_pnl`, consistent with `place_order`. Will require updating the Phase 3 tick
-  test assertions (`tests/test_paper_exchange_tick.py` lines asserting `+63000*0.1` and
-  `(63000-60000)*0.1`) to include fees. Found: Phase 3 review.
+- ✅ **Backtest fee asymmetry (Important).** DONE in Phase 5: `PaperExchange.tick()` now deducts
+  the 0.1% exit fee from proceeds and nets entry+exit fees out of `realized_pnl`, consistent with
+  the live `place_order` SELL path. Phase 3 tick test assertions updated accordingly. Found: Phase 3
+  review; fixed: Phase 5.
+
+- ⬜ **Compare page uses a synthetic backtest equity line (Important).** `Compare.tsx` synthesizes
+  the backtest equity curve by linear interpolation of `total_pnl` over the live trade count — it is
+  NOT the backtest's real per-trade equity. A caveat label was added in Phase 5. To fix properly,
+  `/api/compare` must return the backtest's per-trade equity points (the run's `Trade[]`/equity
+  series, not just the `BacktestRun` summary), and `Compare.tsx` must plot that. Found: Phase 5 review.
 
 - ⬜ **Sharpe / drawdown modeling note (Nit).** `BacktestReporter._calc_sharpe` assumes hourly
   periods (`sqrt(365*24)`) and uses absolute dollar PnL as the per-period return (scale-dependent
