@@ -112,6 +112,13 @@ Status legend: ⬜ open · ✅ done
   pass (watch for naive-vs-aware comparison/isoformat changes, e.g. `exit_time - entry_time`).
   Deferred repeatedly since Phase 1. Found: multiple reviews.
 
+- ⬜ **ClaudeStrategy sync client blocks the async loop (defer to async refactor).** `ClaudeStrategy.on_candle`
+  is sync and calls the blocking `anthropic.Anthropic` client inside the asyncio engine loop — stalls
+  the loop (and the gathered uvicorn server) for the API round-trip. Harmless on the 1h candle loop
+  (<0.1% of period), but for faster timeframes switch to `anthropic.AsyncAnthropic` + async
+  `on_candle` (requires making `BaseStrategy.on_candle` async + Engine update — cross-cutting).
+  Found: Phase 10 review.
+
 - ⬜ **Multi-symbol limitations (Note).** `BacktestRunner` uses `get_trade_log()[-1]` and the engine's
   `_active_decisions[symbol]` is overwritten on re-entry — both correct only because the single-symbol
   re-entry guard prevents concurrent same-symbol positions. Revisit if multi-symbol/multi-position

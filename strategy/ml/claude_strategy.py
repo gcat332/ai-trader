@@ -38,7 +38,11 @@ class ClaudeStrategy(BaseStrategy):
             self._client = client
         else:
             import anthropic
-            self._client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+            # Set the timeout on the client constructor so api_timeout actually takes
+            # effect (the messages.create call does not accept it positionally here).
+            self._client = anthropic.Anthropic(
+                api_key=os.environ["ANTHROPIC_API_KEY"], timeout=api_timeout
+            )
         self._model = model or os.getenv("CLAUDE_STRATEGY_MODEL", "claude-haiku-4-5-20251001")
         self._confidence_threshold = confidence_threshold
         self._api_timeout = api_timeout
