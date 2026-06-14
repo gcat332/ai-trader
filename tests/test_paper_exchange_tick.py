@@ -50,8 +50,10 @@ async def test_tick_updates_balance_on_tp(exchange):
     balance_before = (await exchange.get_balance())["USDT"]
     await exchange.tick("BTC/USDT", high=64000.0, low=60500.0, close=61000.0)
     balance_after = (await exchange.get_balance())["USDT"]
-    # sold 0.1 BTC at 63000 = +6300 USDT
-    assert balance_after == pytest.approx(balance_before + 63000.0 * 0.1, rel=1e-3)
+    # sold 0.1 BTC at 63000 = +6300 USDT, minus 0.1% exit fee (6.3)
+    assert balance_after == pytest.approx(
+        balance_before + 63000.0 * 0.1 - 63000.0 * 0.1 * 0.001, rel=1e-3
+    )
 
 
 @pytest.mark.asyncio
@@ -61,4 +63,7 @@ async def test_get_trade_log_records_completed_trades(exchange):
     log = exchange.get_trade_log()
     assert len(log) == 1
     assert log[0].symbol == "BTC/USDT"
-    assert log[0].realized_pnl == pytest.approx((63000.0 - 60000.0) * 0.1, rel=1e-3)
+    # gross PnL (300) minus entry fee (60000*0.1*0.001=6.0) and exit fee (63000*0.1*0.001=6.3)
+    assert log[0].realized_pnl == pytest.approx(
+        (63000.0 - 60000.0) * 0.1 - 60000.0 * 0.1 * 0.001 - 63000.0 * 0.1 * 0.001, rel=1e-3
+    )

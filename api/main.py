@@ -84,9 +84,14 @@ def create_app(repo: Repository) -> FastAPI:
         q = bus.subscribe()
         try:
             while True:
-                event = await asyncio.wait_for(q.get(), timeout=30.0)
-                await websocket.send_text(json.dumps(event))
-        except (WebSocketDisconnect, asyncio.TimeoutError):
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=30.0)
+                    await websocket.send_text(json.dumps(event))
+                except asyncio.TimeoutError:
+                    # Send a heartbeat to keep the connection alive
+                    await websocket.send_text(json.dumps({"type": "heartbeat"}))
+                    continue
+        except WebSocketDisconnect:
             pass
         finally:
             bus.unsubscribe(q)

@@ -122,13 +122,16 @@ class PaperExchange(Exchange):
         else:
             return None
 
-        # Close position
+        # Close position. Deduct exit fee on proceeds and net entry+exit fees out of
+        # realized PnL so backtest results match the live place_order fee model (0.1%).
         proceeds = hit_price * pos.quantity
+        exit_fee = proceeds * self._fee_rate
+        entry_fee = pos.entry_price * pos.quantity * self._fee_rate
         base_asset = symbol.split("/")[0]
-        self._balance["USDT"] = self._balance.get("USDT", 0.0) + proceeds
+        self._balance["USDT"] = self._balance.get("USDT", 0.0) + proceeds - exit_fee
         self._balance[base_asset] = max(0.0, self._balance.get(base_asset, 0.0) - pos.quantity)
 
-        pnl = (hit_price - pos.entry_price) * pos.quantity
+        pnl = (hit_price - pos.entry_price) * pos.quantity - entry_fee - exit_fee
         self._trade_log.append(TradeRecord(
             symbol=symbol,
             side="SELL",
