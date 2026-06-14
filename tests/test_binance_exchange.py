@@ -72,3 +72,38 @@ async def test_get_balance(exchange):
 async def test_get_positions_empty(exchange):
     positions = await exchange.get_positions()
     assert isinstance(positions, list)
+
+
+# ── Fix 4: OCO stop-limit slippage buffer ────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_oco_sell_stop_limit_price_is_below_stop_price():
+    """For a SELL OCO (long exit) stopLimitPrice must be < stopPrice by the buffer."""
+    with patch("exchange.binance.ccxt.binance") as MockBinance:
+        mock_ccxt = MagicMock()
+        mock_ccxt.create_oco_order = AsyncMock(return_value={
+            "orderListId": "oco-002",
+        })
+        mock_ccxt.amount_to_precision = MagicMock(return_value="0.01")
+        mock_ccxt.set_sandbox_mode = MagicMock()
+        MockBinance.return_value = mock_ccxt
+
+        exch = BinanceExchange(api_key="test", api_secret="test", testnet=True)
+
+        order = Order(
+            id="ord-oco-sell", symbol="BTC/USDT", side="SELL", type="OCO",
+            quantity=0.01, price=67000.0, status="PENDING", exchange_order_id=None,
+        )
+        stop_price = 63500.0
+        await exch.place_order(order, stop_price=stop_price)
+
+        call_kwargs = mock_ccxt.create_oco_order.call_args.kwargs
+        assert "stopPrice" in call_kwargs, "stopPrice must be passed"
+        assert "stopLimitPrice" in call_kwargs, "stopLimitPrice must be passed"
+        # For SELL OCO the stop-limit must be BELOW the stop trigger
+        assert call_kwargs["stopLimitPrice"] < call_kwargs["stopPrice"], (
+            f"stopLimitPrice {call_kwargs['stopLimitPrice']} must be < stopPrice "
+            f"{call_kwargs['stopPrice']} for SELL OCO"
+        )
+        expected_buffer = exch.oco_stop_limit_buffer
+        assert abs(call_kwargs["stopLimitPrice"] - stop_price * (1 - expected_buffer)) < 0.01

@@ -7,7 +7,9 @@ from exchange.base import Exchange
 
 class BinanceExchange(Exchange):
 
-    def __init__(self, api_key: str, api_secret: str, testnet: bool = True):
+    def __init__(self, api_key: str, api_secret: str, testnet: bool = True,
+                 oco_stop_limit_buffer: float = 0.001):
+        self.oco_stop_limit_buffer = oco_stop_limit_buffer
         self._exchange = ccxt.binance({
             "apiKey": api_key,
             "secret": api_secret,
@@ -42,17 +44,34 @@ class BinanceExchange(Exchange):
                 delay *= 2
         return []
 
+    def _precision_amount(self, symbol: str, quantity: float) -> float:
+        """Round quantity to the exchange step size. Falls back to original on any error."""
+        try:
+            return float(self._exchange.amount_to_precision(symbol, quantity))
+        except Exception:
+            return quantity
+
     async def place_order(self, order: Order, stop_price: float | None = None, **kwargs) -> Order:
         filled = order.__class__(**order.__dict__)
+        amount = self._precision_amount(order.symbol, order.quantity)
 
         if order.type == "OCO" and stop_price is not None:
+            # Apply a slippage buffer so the stop-limit is on the worse side of the
+            # trigger price, increasing the probability of fill in a fast market move.
+            # SELL OCO (long exit): limit must be BELOW the trigger.
+            # BUY  OCO (short exit): limit must be ABOVE the trigger.
+            if order.side.upper() == "SELL":
+                stop_limit_price = stop_price * (1 - self.oco_stop_limit_buffer)
+            else:
+                stop_limit_price = stop_price * (1 + self.oco_stop_limit_buffer)
+
             result = await self._exchange.create_oco_order(
                 symbol=order.symbol,
                 side=order.side,
-                amount=order.quantity,
-                price=order.price,           # TP limit price
-                stopPrice=stop_price,        # SL trigger price
-                stopLimitPrice=stop_price,   # SL limit price (same for simplicity)
+                amount=amount,
+                price=order.price,              # TP limit price
+                stopPrice=stop_price,           # SL trigger price
+                stopLimitPrice=stop_limit_price,  # SL limit price (buffered)
             )
             filled.exchange_order_id = str(result.get("orderListId", ""))
             filled.status = "OPEN"
@@ -66,7 +85,7 @@ class BinanceExchange(Exchange):
                 symbol=order.symbol,
                 type=ccxt_type,
                 side=order.side.lower(),
-                amount=order.quantity,
+                amount=amount,
                 price=order.price if order.type == "LIMIT" else None,
                 params=params,
             )
