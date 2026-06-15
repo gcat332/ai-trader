@@ -50,6 +50,16 @@ class StrategyArbiter:
         active_wr = known.get(active, 0.0)
         delta = best_wr - active_wr
 
+        # ε-greedy: occasionally explore an under-sampled technique so a currently-winning
+        # strategy doesn't lock out others whose regime profiles go stale.
+        if self._rng.random() < self._epsilon:
+            samples = {s: in_regime.get(s, (0.0, 0))[1] for s in self._strategies}
+            pick = min(self._strategies, key=lambda s: samples[s])
+            if pick != active:
+                return self._mk(regime, active, pick, "EXPLORE",
+                                f"ε-greedy ({self._epsilon:.0%}) → EXPLORE {pick} "
+                                f"(only {samples[pick]} samples in {regime})")
+
         # 2) A clearly-better technique exists for this regime → SWAP.
         if best != active and delta >= self._swap_margin:
             return self._mk(regime, active, best, "SWAP",
@@ -57,19 +67,16 @@ class StrategyArbiter:
                             f"{best} strong in {regime} ({best_wr:.0%}), "
                             f"Δ={delta:.0%} ≥ {self._swap_margin:.0%} → SWAP")
 
-        # 3) Active is (one of) the best for this regime but degraded → retrain its model.
-        if best == active or delta < self._swap_margin:
-            if active in known and active_wr >= max(known.values()) - 1e-9:
-                return self._mk(regime, active, active, "RETRAIN",
-                                f"{active} is the best technique for {regime} "
-                                f"({active_wr:.0%}) but degraded → RETRAIN model")
+        # 3) Active is genuinely the best technique for this regime but has degraded → retrain its model.
+        if active in known and active_wr >= max(known.values()) - 1e-9:
             return self._mk(regime, active, active, "RETRAIN",
-                            f"{active} ({active_wr:.0%}) within {self._swap_margin:.0%} of best "
-                            f"{best} ({best_wr:.0%}) in {regime} → RETRAIN rather than thrash")
+                            f"{active} is the best technique for {regime} ({active_wr:.0%}) "
+                            f"but degraded → RETRAIN model")
 
-        # 4) Fallback.
+        # 4) Active is not the best and the edge is below the swap margin → not actionable, hold.
         return self._mk(regime, active, active, "HOLD_COURSE",
-                        f"{active} degraded but no actionable {regime} alternative → hold")
+                        f"{active} ({active_wr:.0%}) degraded in {regime}; best {best} ({best_wr:.0%}) "
+                        f"edge Δ={delta:.0%} < margin {self._swap_margin:.0%} → HOLD_COURSE")
 
     def _mk(self, regime, frm, to, decision, reason) -> StrategySwitch:
         return StrategySwitch(

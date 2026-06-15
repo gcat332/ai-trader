@@ -24,10 +24,7 @@ class LiveOutcomeTracker:
             else:
                 entry, _, t0 = self._prev[p.symbol]
                 self._prev[p.symbol] = (entry, p.quantity, t0)
-        # drop fully-gone symbols only after detect_closed has consumed them
-        for sym in list(self._prev):
-            if sym not in seen and sym not in {p.symbol for p in positions}:
-                pass
+        # Symbols that have disappeared are left in _prev for detect_closed to consume.
 
     def detect_closed(self, positions: list[Position], current_price: float) -> list[TradeRecord]:
         now = datetime.now(timezone.utc)
