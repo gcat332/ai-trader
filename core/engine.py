@@ -1,4 +1,5 @@
 # core/engine.py
+import asyncio
 import uuid
 from datetime import datetime, timezone
 import pandas as pd
@@ -34,7 +35,7 @@ class Engine:
         # tracking. challenger_conf is the A/B challenger's confidence at entry
         # (None when no ab_tester), paired back at close to score the challenger.
         # regime is the market regime at signal entry, tagged on the decision record.
-        self._active_decisions: dict[str, tuple[str, float, float | None, str]] = {}
+        self._active_decisions: dict[str, tuple[str, float, float | None, str, str]] = {}
 
     def _build_features(self, df) -> dict[str, float]:
         volume = df["volume"] if "volume" in df.columns else None
@@ -65,7 +66,11 @@ class Engine:
             features = self._build_features(df)
             _, challenger_conf = self._ab_tester.shadow_evaluate(features)
 
-        signal: Signal = self.strategy.on_candle(self.symbol, df)
+        # Offload on_candle to a thread: ClaudeStrategy makes a blocking HTTP call, and the
+        # trading loop shares its event loop with the uvicorn dashboard/WebSocket — a sync call
+        # here would freeze both for the API's duration. to_thread keeps on_candle sync (no
+        # cross-cutting async refactor of BaseStrategy) while unblocking the loop.
+        signal: Signal = await asyncio.to_thread(self.strategy.on_candle, self.symbol, df)
 
         if signal.side == "HOLD":
             await self._log_decision(signal, "HOLD", None, regime)
@@ -96,6 +101,7 @@ class Engine:
                 signal.confidence,
                 challenger_conf,
                 regime,
+                signal.strategy_id,
             )
             await self.exchange.place_order(order, current_price=current_price)
             if hasattr(self.exchange, "set_position_tp_sl"):
@@ -114,7 +120,8 @@ class Engine:
         entry = self._active_decisions.pop(trade.symbol, None)
         if entry is None:
             return
-        decision_id, confidence, challenger_conf, _regime = entry
+        decision_id, confidence, challenger_conf, _regime, strategy_id = entry
+        trade.strategy_id = strategy_id  # stamp so the live loop can persist attributed trades
         from core.models import SignalOutcome
         hold_hours = 0.0
         if trade.exit_time and trade.entry_time:

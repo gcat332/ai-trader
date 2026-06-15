@@ -59,11 +59,12 @@ class Repository:
         await self._conn.execute(
             """INSERT INTO positions
                (symbol, side, entry_price, exit_price, quantity, realized_pnl, mode,
-                entry_time, exit_time, exit_reason)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                entry_time, exit_time, exit_reason, strategy_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (trade.symbol, trade.side, trade.entry_price, trade.exit_price,
              trade.quantity, trade.realized_pnl, "SPOT",
-             trade.entry_time.isoformat(), trade.exit_time.isoformat(), trade.exit_reason),
+             trade.entry_time.isoformat(), trade.exit_time.isoformat(), trade.exit_reason,
+             trade.strategy_id),
         )
         await self._conn.commit()
 
@@ -79,6 +80,9 @@ class Repository:
         if symbol:
             query += " AND symbol = ?"
             params.append(symbol)
+        if strategy_id:
+            query += " AND strategy_id = ?"
+            params.append(strategy_id)
         if from_date:
             query += " AND entry_time >= ?"
             params.append(from_date)

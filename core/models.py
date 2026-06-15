@@ -52,6 +52,7 @@ class TradeRecord:
     entry_time: datetime
     exit_time: datetime
     exit_reason: Literal["TP", "SL", "MANUAL"]
+    strategy_id: str = ""  # which (sub-)strategy opened the position; stamped at close
 
 
 @dataclass

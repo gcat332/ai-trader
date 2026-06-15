@@ -223,7 +223,8 @@ async def run():
                         if isinstance(strategy, MetaStrategy):
                             positions_now = await exchange.get_positions()
                             for trade in outcome_tracker.detect_closed(positions_now, last_close):
-                                await engine.record_trade_outcome(trade)
+                                await engine.record_trade_outcome(trade)  # stamps trade.strategy_id
+                                await repo.insert_trade(trade)  # persist to live trade log (Trade History/Compare)
                             outcome_tracker.snapshot(await exchange.get_positions())
 
                         # Drift check every N candles (configurable via DRIFT_CHECK_INTERVAL env var)
