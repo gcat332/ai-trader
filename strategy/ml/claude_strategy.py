@@ -8,6 +8,19 @@ from strategy.ml.skill_loader import load_trading_skills
 from core.models import Signal
 
 _MIN_TP_SL_RATIO = 1.5
+
+_DECISION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "decision": {"type": "string", "enum": ["BUY", "SELL", "HOLD"]},
+        "confidence": {"type": "number"},
+        "narrative": {"type": "string"},
+        "take_profit": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+        "stop_loss": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+    },
+    "required": ["decision", "confidence", "narrative", "take_profit", "stop_loss"],
+    "additionalProperties": False,
+}
 _DEFAULT_SL_PCT = 0.02   # 2% default stop loss
 _DEFAULT_TP_PCT = 0.035  # 3.5% default take profit (1.75× SL)
 
@@ -131,6 +144,7 @@ class ClaudeStrategy(BaseStrategy):
                 max_tokens=512,
                 system=_get_system_prompt(),
                 messages=[{"role": "user", "content": user_prompt}],
+                output_config={"format": {"type": "json_schema", "schema": _DECISION_SCHEMA}},
             )
             raw = response.content[0].text.strip()
             data = json.loads(raw)

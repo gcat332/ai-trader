@@ -148,3 +148,15 @@ def test_validate_rejects_when_claude_disagrees():
     )
     result = strategy.validate(original, _make_ohlcv())
     assert result.side == "HOLD"
+
+
+def test_create_called_with_output_config():
+    """messages.create must be called with output_config containing json_schema format."""
+    mock_client = _mock_api_response("BUY", 0.82)
+    strategy = ClaudeStrategy(client=mock_client)
+    strategy.on_candle("BTC/USDT", _make_ohlcv())
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert "output_config" in call_kwargs, "output_config kwarg not passed to messages.create"
+    fmt = call_kwargs["output_config"]["format"]
+    assert fmt["type"] == "json_schema", f"Expected json_schema, got {fmt['type']}"
+    assert "decision" in fmt["schema"]["properties"], "Schema missing 'decision' property"
