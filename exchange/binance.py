@@ -69,14 +69,20 @@ class BinanceExchange(Exchange):
             else:
                 stop_limit_price = stop_price * (1 + self.oco_stop_limit_buffer)
 
-            result = await self._exchange.create_oco_order(
-                symbol=order.symbol,
-                side=order.side,
-                amount=amount,
-                price=order.price,              # TP limit price
-                stopPrice=stop_price,           # SL trigger price
-                stopLimitPrice=stop_limit_price,  # SL limit price (buffered)
-            )
+            # ccxt 4.5 dropped the unified create_oco_order; call Binance's OCO
+            # endpoint directly. Legacy POST /api/v3/order/oco works on mainnet +
+            # testnet and matches our TP-limit / SL-stop-limit shape (verified on
+            # testnet). ponytail: switch to orderList/oco if Binance retires this.
+            ex = self._exchange
+            result = await ex.privatePostOrderOco({
+                "symbol": ex.market_id(order.symbol),
+                "side": order.side.upper(),
+                "quantity": ex.amount_to_precision(order.symbol, amount),
+                "price": ex.price_to_precision(order.symbol, order.price),            # TP limit
+                "stopPrice": ex.price_to_precision(order.symbol, stop_price),         # SL trigger
+                "stopLimitPrice": ex.price_to_precision(order.symbol, stop_limit_price),  # SL limit (buffered)
+                "stopLimitTimeInForce": "GTC",
+            })
             filled.exchange_order_id = str(result.get("orderListId", ""))
             filled.status = "OPEN"
         else:

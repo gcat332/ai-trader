@@ -14,10 +14,14 @@ def exchange():
         mock_ccxt.create_order = AsyncMock(return_value={
             "id": "ex-001", "status": "closed", "filled": 0.01, "price": 65000.0,
         })
-        mock_ccxt.create_oco_order = AsyncMock(return_value={
+        # OCO goes through Binance's raw endpoint (ccxt 4.5 dropped create_oco_order).
+        mock_ccxt.privatePostOrderOco = AsyncMock(return_value={
             "orderListId": "oco-001",
             "orders": [{"orderId": "tp-001"}, {"orderId": "sl-001"}],
         })
+        mock_ccxt.market_id = MagicMock(return_value="BTCUSDT")
+        mock_ccxt.amount_to_precision = MagicMock(side_effect=lambda s, a: a)
+        mock_ccxt.price_to_precision = MagicMock(side_effect=lambda s, p: p)
         mock_ccxt.cancel_order = AsyncMock(return_value={"status": "canceled"})
         mock_ccxt.fetch_positions = AsyncMock(return_value=[])
         mock_ccxt.fetch_balance = AsyncMock(return_value={
@@ -81,10 +85,12 @@ async def test_oco_sell_stop_limit_price_is_below_stop_price():
     """For a SELL OCO (long exit) stopLimitPrice must be < stopPrice by the buffer."""
     with patch("exchange.binance.ccxt.binance") as MockBinance:
         mock_ccxt = MagicMock()
-        mock_ccxt.create_oco_order = AsyncMock(return_value={
+        mock_ccxt.privatePostOrderOco = AsyncMock(return_value={
             "orderListId": "oco-002",
         })
-        mock_ccxt.amount_to_precision = MagicMock(return_value="0.01")
+        mock_ccxt.market_id = MagicMock(return_value="BTCUSDT")
+        mock_ccxt.amount_to_precision = MagicMock(side_effect=lambda s, a: a)
+        mock_ccxt.price_to_precision = MagicMock(side_effect=lambda s, p: p)
         mock_ccxt.set_sandbox_mode = MagicMock()
         MockBinance.return_value = mock_ccxt
 
@@ -97,16 +103,28 @@ async def test_oco_sell_stop_limit_price_is_below_stop_price():
         stop_price = 63500.0
         await exch.place_order(order, stop_price=stop_price)
 
-        call_kwargs = mock_ccxt.create_oco_order.call_args.kwargs
-        assert "stopPrice" in call_kwargs, "stopPrice must be passed"
-        assert "stopLimitPrice" in call_kwargs, "stopLimitPrice must be passed"
+        params = mock_ccxt.privatePostOrderOco.call_args.args[0]
+        assert "stopPrice" in params, "stopPrice must be passed"
+        assert "stopLimitPrice" in params, "stopLimitPrice must be passed"
         # For SELL OCO the stop-limit must be BELOW the stop trigger
-        assert call_kwargs["stopLimitPrice"] < call_kwargs["stopPrice"], (
-            f"stopLimitPrice {call_kwargs['stopLimitPrice']} must be < stopPrice "
-            f"{call_kwargs['stopPrice']} for SELL OCO"
+        assert params["stopLimitPrice"] < params["stopPrice"], (
+            f"stopLimitPrice {params['stopLimitPrice']} must be < stopPrice "
+            f"{params['stopPrice']} for SELL OCO"
         )
         expected_buffer = exch.oco_stop_limit_buffer
-        assert abs(call_kwargs["stopLimitPrice"] - stop_price * (1 - expected_buffer)) < 0.01
+        assert abs(params["stopLimitPrice"] - stop_price * (1 - expected_buffer)) < 0.01
+
+
+def test_place_order_oco_calls_method_that_exists_on_real_ccxt():
+    """Regression guard for the go-live OCO bug: the methods place_order calls must
+    actually exist on the real ccxt client. The old mock hid a removed method
+    (create_oco_order) so prod crashed while every unit test passed. No network —
+    ccxt creates its HTTP session lazily on first request, not on construction."""
+    import ccxt.async_support as real_ccxt
+    client = real_ccxt.binance()
+    for method in ("privatePostOrderOco", "create_order", "cancel_order",
+                   "market_id", "amount_to_precision", "price_to_precision"):
+        assert hasattr(client, method), f"ccxt binance has no {method!r}"
 
 
 # ── Fix 5: amount_to_precision rounding ──────────────────────────────────────
@@ -175,11 +193,11 @@ async def test_protect_position_places_oco_with_stop(exchange):
         symbol="BTC/USDT", side="BUY", quantity=0.01,
         take_profit=67000.0, stop_loss=63500.0, current_price=65000.0,
     )
-    exchange._exchange.create_oco_order.assert_awaited_once()
-    kwargs = exchange._exchange.create_oco_order.call_args.kwargs
-    assert kwargs["side"] == "SELL"           # exit side opposite the entry
-    assert kwargs["stopPrice"] == 63500.0
-    assert kwargs["price"] == 67000.0
+    exchange._exchange.privatePostOrderOco.assert_awaited_once()
+    params = exchange._exchange.privatePostOrderOco.call_args.args[0]
+    assert params["side"] == "SELL"           # exit side opposite the entry
+    assert params["stopPrice"] == 63500.0
+    assert params["price"] == 67000.0
 
 
 @pytest.mark.asyncio
@@ -189,7 +207,7 @@ async def test_protect_position_falls_back_to_stop_when_no_tp(exchange):
         symbol="BTC/USDT", side="BUY", quantity=0.01,
         take_profit=None, stop_loss=63500.0, current_price=65000.0,
     )
-    exchange._exchange.create_oco_order.assert_not_awaited()
+    exchange._exchange.privatePostOrderOco.assert_not_awaited()
     exchange._exchange.create_order.assert_awaited()
 
 
@@ -200,7 +218,7 @@ async def test_protect_position_noop_without_stop(exchange):
         symbol="BTC/USDT", side="BUY", quantity=0.01,
         take_profit=67000.0, stop_loss=None,
     )
-    exchange._exchange.create_oco_order.assert_not_awaited()
+    exchange._exchange.privatePostOrderOco.assert_not_awaited()
 
 
 # ── B2: spot positions are reconstructed from the balance, not fetch_positions ─

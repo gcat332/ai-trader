@@ -6,7 +6,13 @@ class DataFetcher:
 
     def __init__(self, exchange_id: str = "binance", testnet: bool = True):
         exchange_class = getattr(ccxt, exchange_id)
-        self._exchange = exchange_class({"enableRateLimit": True})
+        # Spot-only bot: stop ccxt from reaching the futures testnet (dapi/fapi)
+        # during load_markets — those endpoints are unavailable on testnet and
+        # raise, which broke every paper-mode data fetch. Mirrors BinanceExchange.
+        self._exchange = exchange_class({
+            "enableRateLimit": True,
+            "options": {"defaultType": "spot", "fetchMarkets": ["spot"]},
+        })
         if testnet:
             self._exchange.set_sandbox_mode(True)
 
