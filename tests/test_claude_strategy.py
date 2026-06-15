@@ -1,7 +1,7 @@
 # tests/test_claude_strategy.py
 import pytest
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 from strategy.ml.claude_strategy import ClaudeStrategy
@@ -121,7 +121,7 @@ def test_validate_confirm_signal():
     original = Signal(
         symbol="BTC/USDT", side="BUY", entry_price=65000.0,
         take_profit=67000.0, stop_loss=63500.0, trailing_sl=False,
-        confidence=0.75, strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+        confidence=0.75, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
         narrative="RSI=26 (oversold) | MACD bullish",
     )
     enriched = strategy.validate(original, _make_ohlcv())
@@ -144,7 +144,7 @@ def test_validate_rejects_when_claude_disagrees():
     original = Signal(
         symbol="BTC/USDT", side="BUY", entry_price=65000.0,
         take_profit=67000.0, stop_loss=63500.0, trailing_sl=False,
-        confidence=0.75, strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+        confidence=0.75, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
     )
     result = strategy.validate(original, _make_ohlcv())
     assert result.side == "HOLD"

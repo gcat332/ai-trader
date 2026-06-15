@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from pandas import DataFrame
 from core.models import Signal
 from core.engine import Engine
@@ -19,7 +19,7 @@ class AlwaysBuyStrategy(BaseStrategy):
             trailing_sl=False,
             confidence=0.9,
             strategy_id="always_buy",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
 
 
@@ -34,7 +34,7 @@ class AlwaysHoldStrategy(BaseStrategy):
             trailing_sl=False,
             confidence=0.5,
             strategy_id="always_hold",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
 
 

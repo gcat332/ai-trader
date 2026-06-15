@@ -1,6 +1,6 @@
 # tests/test_backtest_runner.py
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from pandas import DataFrame
 from core.models import Signal, TradeRecord
 from strategy.base import BaseStrategy
@@ -19,7 +19,7 @@ class AlwaysBuyWithSlStrategy(BaseStrategy):
             take_profit=round(price * 1.03, 2),
             stop_loss=round(price * 0.98, 2),
             trailing_sl=False, confidence=0.9,
-            strategy_id="always_buy", timestamp=datetime.utcnow(),
+            strategy_id="always_buy", timestamp=datetime.now(timezone.utc),
         )
 
 

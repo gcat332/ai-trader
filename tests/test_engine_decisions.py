@@ -2,7 +2,7 @@
 import asyncio
 import pytest
 import aiosqlite
-from datetime import datetime
+from datetime import datetime, timezone
 from pandas import DataFrame
 from core.models import Signal
 from core.engine import Engine
@@ -20,7 +20,7 @@ class BuyWithSlStrategy(BaseStrategy):
             symbol=symbol, side="BUY", entry_price=price,
             take_profit=price * 1.03, stop_loss=price * 0.98,
             trailing_sl=False, confidence=0.85,
-            strategy_id="test", timestamp=datetime.utcnow(),
+            strategy_id="test", timestamp=datetime.now(timezone.utc),
             narrative="RSI=25 (oversold) | MACD bullish → BUY placed",
         )
 
@@ -65,7 +65,7 @@ async def test_engine_logs_rejected_decision(repo):
                 symbol=symbol, side="BUY", entry_price=price,
                 take_profit=price * 1.03, stop_loss=None,
                 trailing_sl=False, confidence=0.85,
-                strategy_id="test", timestamp=datetime.utcnow(),
+                strategy_id="test", timestamp=datetime.now(timezone.utc),
             )
 
     exchange = PaperExchange(initial_balance={"USDT": 10000.0})
@@ -121,7 +121,7 @@ async def test_engine_record_trade_outcome(repo):
         symbol="BTC/USDT", side="SELL",
         entry_price=65000.0, exit_price=66950.0,
         quantity=0.005, realized_pnl=9.75,
-        entry_time=datetime.utcnow(), exit_time=datetime.utcnow(),
+        entry_time=datetime.now(timezone.utc), exit_time=datetime.now(timezone.utc),
         exit_reason="TP",
     )
     await engine.record_trade_outcome(trade)

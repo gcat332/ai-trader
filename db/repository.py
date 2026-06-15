@@ -1,5 +1,5 @@
 # db/repository.py
-from datetime import datetime
+from datetime import datetime, timezone
 import aiosqlite
 from core.models import Order, Signal, TradeRecord
 
@@ -16,7 +16,7 @@ class Repository:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (order.id, order.symbol, order.side, order.type, order.quantity,
              order.price, order.status, order.exchange_order_id, strategy_id,
-             datetime.utcnow().isoformat()),
+             datetime.now(timezone.utc).isoformat()),
         )
         await self._conn.commit()
 
@@ -108,7 +108,7 @@ class Repository:
             (run_id, strategy_id, symbol, from_date, to_date,
              stats["total_trades"], stats["total_pnl"], stats["win_rate"],
              stats["max_drawdown"], stats["sharpe_ratio"],
-             datetime.utcnow().isoformat()),
+             datetime.now(timezone.utc).isoformat()),
         )
         await self._conn.commit()
 

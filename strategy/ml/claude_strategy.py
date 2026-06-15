@@ -1,7 +1,7 @@
 # strategy/ml/claude_strategy.py
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 from strategy.base import BaseStrategy
 from strategy.ml.skill_loader import load_trading_skills
@@ -179,7 +179,7 @@ class ClaudeStrategy(BaseStrategy):
             trailing_sl=False,
             confidence=confidence,
             strategy_id=strategy_id,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             narrative=narrative,
         )
 
@@ -195,6 +195,6 @@ class ClaudeStrategy(BaseStrategy):
             symbol=symbol, side="HOLD", entry_price=entry_price,
             take_profit=None, stop_loss=None, trailing_sl=False,
             confidence=0.0, strategy_id="claude_fallback",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             narrative=fallback_narrative,
         )

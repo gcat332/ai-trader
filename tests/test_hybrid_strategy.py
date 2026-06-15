@@ -1,6 +1,6 @@
 # tests/test_hybrid_strategy.py
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 import json
 import pandas as pd
@@ -25,7 +25,7 @@ class AlwaysBuyStrategy(BaseStrategy):
             symbol=symbol, side="BUY", entry_price=price,
             take_profit=price * 1.035, stop_loss=price * 0.98,
             trailing_sl=False, confidence=0.75, strategy_id="test",
-            timestamp=datetime.utcnow(), narrative="RSI=27 | MACD bullish → BUY",
+            timestamp=datetime.now(timezone.utc), narrative="RSI=27 | MACD bullish → BUY",
         )
 
 
@@ -35,7 +35,7 @@ class AlwaysHoldStrategy(BaseStrategy):
         return Signal(
             symbol=symbol, side="HOLD", entry_price=price,
             take_profit=None, stop_loss=None, trailing_sl=False,
-            confidence=0.0, strategy_id="test", timestamp=datetime.utcnow(),
+            confidence=0.0, strategy_id="test", timestamp=datetime.now(timezone.utc),
             narrative="ADX=14 sideways → HOLD",
         )
 
@@ -56,7 +56,7 @@ def test_buy_from_gatekeeper_calls_validator():
     confirmed = Signal(
         symbol="BTC/USDT", side="BUY", entry_price=65000.0,
         take_profit=67275.0, stop_loss=63700.0, trailing_sl=False,
-        confidence=0.88, strategy_id="hybrid", timestamp=datetime.utcnow(),
+        confidence=0.88, strategy_id="hybrid", timestamp=datetime.now(timezone.utc),
         narrative="RSI=27 oversold | Claude confirmed | ADX=32 → BUY",
     )
     validator_mock.validate = MagicMock(return_value=confirmed)
@@ -73,7 +73,7 @@ def test_validator_can_reject_gatekeeper_buy():
     rejected = Signal(
         symbol="BTC/USDT", side="HOLD", entry_price=65000.0,
         take_profit=None, stop_loss=None, trailing_sl=False,
-        confidence=0.0, strategy_id="hybrid", timestamp=datetime.utcnow(),
+        confidence=0.0, strategy_id="hybrid", timestamp=datetime.now(timezone.utc),
         narrative="Volume too low, Claude rejected gatekeeper BUY → HOLD",
     )
     validator_mock.validate = MagicMock(return_value=rejected)
@@ -88,7 +88,7 @@ def test_hybrid_strategy_id_reflects_mode():
     enriched = Signal(
         symbol="BTC/USDT", side="BUY", entry_price=65000.0,
         take_profit=67275.0, stop_loss=63700.0, trailing_sl=False,
-        confidence=0.85, strategy_id="hybrid", timestamp=datetime.utcnow(),
+        confidence=0.85, strategy_id="hybrid", timestamp=datetime.now(timezone.utc),
         narrative="hybrid confirmed",
     )
     validator_mock.validate = MagicMock(return_value=enriched)

@@ -32,9 +32,11 @@ from strategy.base import BaseStrategy
 
 
 def _cooldown_elapsed(last_retrain_iso: str, days: int) -> bool:
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     last = datetime.fromisoformat(last_retrain_iso)
-    return (datetime.utcnow() - last) >= timedelta(days=days)
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - last) >= timedelta(days=days)
 
 
 def _build_strategy() -> BaseStrategy:

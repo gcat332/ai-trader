@@ -1,6 +1,6 @@
 # tests/test_engine_with_risk.py
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from pandas import DataFrame
 from core.models import Signal
 from core.engine import Engine
@@ -20,7 +20,7 @@ class BuyWithSlStrategy(BaseStrategy):
             trailing_sl=False,
             confidence=0.85,
             strategy_id="test",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
 
 
@@ -35,7 +35,7 @@ class LowConfidenceStrategy(BaseStrategy):
             trailing_sl=False,
             confidence=0.3,   # below threshold
             strategy_id="test",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
 
 
@@ -50,7 +50,7 @@ class NoSlStrategy(BaseStrategy):
             trailing_sl=False,
             confidence=0.9,
             strategy_id="test",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
 
 

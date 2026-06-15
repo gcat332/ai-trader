@@ -16,7 +16,7 @@ async def test_init_db_creates_tables():
     assert {"orders", "positions", "signals", "backtest_runs"} <= tables
 
 
-from datetime import datetime
+from datetime import datetime, timezone
 from core.models import Order, Signal, TradeRecord
 from db.repository import Repository
 
@@ -47,7 +47,7 @@ async def test_insert_and_fetch_signal(repo):
         symbol="BTC/USDT", side="BUY", entry_price=65000.0,
         take_profit=67000.0, stop_loss=63500.0,
         trailing_sl=False, confidence=0.85,
-        strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+        strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
     )
     await repo.insert_signal(signal)
     signals = await repo.get_signals(symbol="BTC/USDT")
@@ -57,7 +57,7 @@ async def test_insert_and_fetch_signal(repo):
 
 @pytest.mark.asyncio
 async def test_insert_and_fetch_trade(repo):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     trade = TradeRecord(
         symbol="BTC/USDT", side="SELL",
         entry_price=60000.0, exit_price=63000.0,
@@ -90,7 +90,7 @@ async def test_insert_and_fetch_backtest_run(repo):
 
 @pytest.mark.asyncio
 async def test_get_trade_history_filters_by_symbol(repo):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     for symbol in ["BTC/USDT", "ETH/USDT", "BTC/USDT"]:
         t = TradeRecord(symbol=symbol, side="SELL", entry_price=100.0, exit_price=103.0,
                         quantity=1.0, realized_pnl=3.0, entry_time=now, exit_time=now,

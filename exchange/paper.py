@@ -99,7 +99,7 @@ class PaperExchange(Exchange):
         self, symbol: str, high: float, low: float, close: float
     ) -> Order | None:
         """Check if TP or SL was hit this candle. Closes position and returns fill Order if so."""
-        from datetime import datetime
+        from datetime import datetime, timezone
         from core.models import TradeRecord
         pos = self._positions.get(symbol)
         if pos is None:
@@ -139,8 +139,8 @@ class PaperExchange(Exchange):
             exit_price=hit_price,
             quantity=pos.quantity,
             realized_pnl=pnl,
-            entry_time=datetime.utcnow(),
-            exit_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
+            exit_time=datetime.now(timezone.utc),
             exit_reason=exit_reason,
         ))
 

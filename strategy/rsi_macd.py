@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 from core.models import Signal
 from strategy.base import BaseStrategy
@@ -111,7 +111,7 @@ class RsiMacdStrategy(BaseStrategy):
                 take_profit=round(entry_price * (1 + self._tp_pct), 8),
                 stop_loss=round(entry_price * (1 - self._sl_pct), 8),
                 trailing_sl=False, confidence=confidence,
-                strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+                strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
                 narrative=narrative,
             )
 
@@ -133,7 +133,7 @@ class RsiMacdStrategy(BaseStrategy):
                 take_profit=round(entry_price * (1 - self._tp_pct), 8),
                 stop_loss=round(entry_price * (1 + self._sl_pct), 8),
                 trailing_sl=False, confidence=confidence,
-                strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+                strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
                 narrative=narrative,
             )
 
@@ -157,5 +157,5 @@ class RsiMacdStrategy(BaseStrategy):
             symbol=symbol, side="HOLD", entry_price=entry_price,
             take_profit=None, stop_loss=None, trailing_sl=False,
             confidence=0.0, strategy_id="rsi_macd",
-            timestamp=datetime.utcnow(), narrative=narrative,
+            timestamp=datetime.now(timezone.utc), narrative=narrative,
         )
