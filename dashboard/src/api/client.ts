@@ -110,3 +110,26 @@ export function useABTests() {
     refetchInterval: 120_000,
   });
 }
+
+export interface StrategyProfile {
+  strategy_id: string; regime: string;
+  win_rate: number; avg_pnl: number; sample_count: number;
+}
+export interface StrategySwitch {
+  id: string; timestamp: string; regime: string;
+  from_strategy: string; to_strategy: string; decision: string; reason: string;
+}
+export function useStrategyProfiles() {
+  return useQuery<StrategyProfile[]>({
+    queryKey: ["strategy-profiles"],
+    queryFn: () => fetch("/api/strategy-profiles").then((r) => r.json()),
+    refetchInterval: 60_000,
+  });
+}
+export function useStrategySwitches() {
+  return useQuery<StrategySwitch[]>({
+    queryKey: ["strategy-switches"],
+    queryFn: () => fetch("/api/strategy-switches").then((r) => r.json()),
+    refetchInterval: 60_000,
+  });
+}
