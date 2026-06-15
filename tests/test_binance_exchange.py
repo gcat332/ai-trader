@@ -164,3 +164,80 @@ async def test_place_order_falls_back_to_original_quantity_when_precision_raises
         create_kwargs = mock_ccxt.create_order.call_args
         actual_amount = create_kwargs.kwargs.get("amount") or create_kwargs.args[3]
         assert actual_amount == pytest.approx(0.012345)
+
+
+# ── B1: protect_position places a real exchange-side stop ─────────────────────
+
+@pytest.mark.asyncio
+async def test_protect_position_places_oco_with_stop(exchange):
+    """A long entry must be protected by an OCO carrying the stop-loss trigger."""
+    await exchange.protect_position(
+        symbol="BTC/USDT", side="BUY", quantity=0.01,
+        take_profit=67000.0, stop_loss=63500.0, current_price=65000.0,
+    )
+    exchange._exchange.create_oco_order.assert_awaited_once()
+    kwargs = exchange._exchange.create_oco_order.call_args.kwargs
+    assert kwargs["side"] == "SELL"           # exit side opposite the entry
+    assert kwargs["stopPrice"] == 63500.0
+    assert kwargs["price"] == 67000.0
+
+
+@pytest.mark.asyncio
+async def test_protect_position_falls_back_to_stop_when_no_tp(exchange):
+    """With no take-profit there is no OCO; a plain STOP order must still be placed."""
+    await exchange.protect_position(
+        symbol="BTC/USDT", side="BUY", quantity=0.01,
+        take_profit=None, stop_loss=63500.0, current_price=65000.0,
+    )
+    exchange._exchange.create_oco_order.assert_not_awaited()
+    exchange._exchange.create_order.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_protect_position_noop_without_stop(exchange):
+    """No stop-loss → nothing to place (risk manager rejects these upstream anyway)."""
+    await exchange.protect_position(
+        symbol="BTC/USDT", side="BUY", quantity=0.01,
+        take_profit=67000.0, stop_loss=None,
+    )
+    exchange._exchange.create_oco_order.assert_not_awaited()
+
+
+# ── B2: spot positions are reconstructed from the balance, not fetch_positions ─
+
+@pytest.mark.asyncio
+async def test_get_positions_reads_spot_balance(exchange):
+    """Non-quote assets with a free balance are reported as open spot LONG positions."""
+    positions = await exchange.get_positions()
+    assert len(positions) == 1
+    p = positions[0]
+    assert p.symbol == "BTC/USDT"
+    assert p.side == "LONG"
+    assert p.quantity == pytest.approx(0.01)
+    assert p.mode == "SPOT"
+    # USDT is a quote asset and must NOT appear as a position
+    assert all(pos.symbol != "USDT/USDT" for pos in positions)
+
+
+@pytest.mark.asyncio
+async def test_get_positions_reports_entry_price_from_fill(exchange):
+    """entry_price is recovered from the fill price recorded at order time."""
+    order = Order(
+        id="ord-entry", symbol="BTC/USDT", side="BUY", type="MARKET",
+        quantity=0.01, price=None, status="PENDING", exchange_order_id=None,
+    )
+    await exchange.place_order(order, current_price=65000.0)
+    positions = await exchange.get_positions()
+    assert positions[0].entry_price == pytest.approx(65000.0)
+
+
+@pytest.mark.asyncio
+async def test_market_order_sends_client_order_id(exchange):
+    """B4 idempotency: the deterministic client order id is passed to Binance."""
+    order = Order(
+        id="ord-idem-123", symbol="BTC/USDT", side="BUY", type="MARKET",
+        quantity=0.01, price=None, status="PENDING", exchange_order_id=None,
+    )
+    await exchange.place_order(order)
+    params = exchange._exchange.create_order.call_args.kwargs["params"]
+    assert params["newClientOrderId"] == "ord-idem-123"

@@ -110,6 +110,19 @@ def test_sell_with_existing_position_allowed(risk):
     assert risk.evaluate(sell_signal, {"USDT": 10000.0}, [pos]) is not None
 
 
+def test_sell_order_sized_to_held_quantity(risk):
+    """H1: a SELL exit must sell exactly the held quantity, not a fresh 5% notional slice."""
+    sell_signal = Signal(
+        symbol="BTC/USDT", side="SELL", entry_price=65000.0,
+        take_profit=63000.0, stop_loss=67000.0, trailing_sl=False,
+        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
+    )
+    pos = _open_position("BTC/USDT")  # quantity=0.01
+    order = risk.evaluate(sell_signal, {"USDT": 10000.0}, [pos])
+    assert order is not None
+    assert order.quantity == pytest.approx(0.01)
+
+
 def test_reentry_guard_blocks_duplicate_buy(risk):
     pos = _open_position("BTC/USDT")
     assert risk.evaluate(_buy_signal(), {"USDT": 10000.0}, [pos]) is None

@@ -42,3 +42,24 @@ class Settings:
         """Active API secret for the selected network (testnet/mainnet), with legacy fallback."""
         specific = self.binance_testnet_api_secret if self.binance_testnet else self.binance_mainnet_api_secret
         return specific or os.getenv("BINANCE_API_SECRET", "")
+
+    def validate(self, paper_mode: bool, strategy_mode: str = "rule_based",
+                 arbiter_mode: str = "rule") -> None:
+        """Fail fast at startup if required secrets are missing, instead of crashing
+        opaquely on the first signed API call. Paper mode needs no Binance keys."""
+        errors: list[str] = []
+        if not paper_mode:
+            network = "testnet" if self.binance_testnet else "mainnet"
+            if not self.binance_api_key or not self.binance_api_secret:
+                errors.append(
+                    f"Live trading on {network} requires Binance {network} API key + secret "
+                    f"(set BINANCE_{network.upper()}_API_KEY / _SECRET in .env)"
+                )
+        if strategy_mode in ("hybrid", "claude_ai") or arbiter_mode == "claude":
+            if not os.getenv("ANTHROPIC_API_KEY"):
+                errors.append(
+                    f"ANTHROPIC_API_KEY is required for STRATEGY_MODE={strategy_mode!r}"
+                    f" / ARBITER_MODE={arbiter_mode!r}"
+                )
+        if errors:
+            raise ValueError("Configuration error(s):\n  - " + "\n  - ".join(errors))

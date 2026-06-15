@@ -1,8 +1,12 @@
 # exchange/binance.py
 import asyncio
+import uuid
 import ccxt.async_support as ccxt
 from core.models import Order, Position
 from exchange.base import Exchange
+
+# Assets that are a quote currency, not a tradable spot "position".
+_QUOTE_ASSETS = {"USDT", "USDC", "BUSD", "FDUSD", "TUSD", "DAI"}
 
 
 class BinanceExchange(Exchange):
@@ -10,6 +14,11 @@ class BinanceExchange(Exchange):
     def __init__(self, api_key: str, api_secret: str, testnet: bool = True,
                  oco_stop_limit_buffer: float = 0.001):
         self.oco_stop_limit_buffer = oco_stop_limit_buffer
+        # Spot has no venue-side "position" concept, so we remember the fill price of
+        # each entry to reconstruct entry_price in get_positions().
+        # ponytail: in-memory, lost on restart — startup reconciliation (B4) rebuilds
+        # quantities from balances; entry_price falls back to 0.0 until next fill.
+        self._entry_prices: dict[str, float] = {}
         self._exchange = ccxt.binance({
             "apiKey": api_key,
             "secret": api_secret,
@@ -22,17 +31,11 @@ class BinanceExchange(Exchange):
         if testnet:
             self._exchange.set_sandbox_mode(True)
 
-    async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int) -> list[list]:
-        return await self._exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-
-    async def fetch_ohlcv_with_retry(
-        self,
-        symbol: str,
-        timeframe: str,
-        limit: int,
-        max_retries: int = 5,
-    ) -> list[list]:
-        """Fetch OHLCV with exponential backoff. Raises after max_retries consecutive failures."""
+    async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int,
+                          max_retries: int = 5) -> list[list]:
+        """Fetch OHLCV with exponential backoff. Raises after max_retries consecutive failures.
+        ponytail: same retry loop as DataFetcher but kept in each layer's own home to
+        avoid the exchange adapter depending on the data module."""
         delay = 5.0
         for attempt in range(max_retries):
             try:
@@ -51,7 +54,8 @@ class BinanceExchange(Exchange):
         except Exception:
             return quantity
 
-    async def place_order(self, order: Order, stop_price: float | None = None, **kwargs) -> Order:
+    async def place_order(self, order: Order, current_price: float = 0.0,
+                          stop_price: float | None = None) -> Order:
         filled = order.__class__(**order.__dict__)
         amount = self._precision_amount(order.symbol, order.quantity)
 
@@ -78,7 +82,10 @@ class BinanceExchange(Exchange):
         else:
             type_map = {"MARKET": "market", "LIMIT": "limit", "STOP_MARKET": "stop_market"}
             ccxt_type = type_map.get(order.type, "market")
-            params = {}
+            # Idempotency: a deterministic client order id lets Binance reject a
+            # duplicate submission (e.g. a retry after an ambiguous network error)
+            # instead of opening a second position. Binance caps it at 36 chars.
+            params = {"newClientOrderId": order.id[:36]}
             if order.type == "STOP_MARKET":
                 params["stopPrice"] = order.price
             result = await self._exchange.create_order(
@@ -91,27 +98,61 @@ class BinanceExchange(Exchange):
             )
             filled.exchange_order_id = str(result.get("id", ""))
             filled.status = "FILLED" if result.get("status") == "closed" else "OPEN"
+            # Remember the entry price so get_positions() can report it on spot.
+            if order.side.upper() == "BUY":
+                fill_px = float(result.get("average") or result.get("price") or current_price or 0.0)
+                if fill_px > 0:
+                    self._entry_prices[order.symbol] = fill_px
 
         return filled
+
+    async def protect_position(
+        self, symbol: str, side: str, quantity: float,
+        take_profit: float | None, stop_loss: float | None,
+        current_price: float = 0.0,
+    ) -> Order | None:
+        if stop_loss is None:
+            return None
+        exit_side = "SELL" if side.upper() == "BUY" else "BUY"
+        protective = Order(
+            id=str(uuid.uuid4()),
+            symbol=symbol,
+            side=exit_side,
+            type="OCO" if take_profit is not None else "STOP_MARKET",
+            quantity=quantity,
+            price=take_profit if take_profit is not None else stop_loss,
+            status="PENDING",
+            exchange_order_id=None,
+        )
+        # OCO needs both legs (TP limit + SL stop); with no TP we fall back to a
+        # plain stop order so the position is never left without a stop.
+        return await self.place_order(protective, current_price=current_price, stop_price=stop_loss)
 
     async def cancel_order(self, order_id: str, symbol: str) -> None:
         await self._exchange.cancel_order(order_id, symbol)
 
     async def get_positions(self) -> list[Position]:
-        raw = await self._exchange.fetch_positions()
+        # Spot has no fetch_positions endpoint — holdings ARE the balance. Each
+        # non-quote asset with a free balance is an open long spot position.
+        raw = await self._exchange.fetch_balance()
         positions = []
-        for p in raw:
-            if float(p.get("contracts", 0) or 0) > 0:
-                positions.append(Position(
-                    symbol=p["symbol"],
-                    side="LONG" if p.get("side") == "long" else "SHORT",
-                    entry_price=float(p.get("entryPrice", 0)),
-                    quantity=float(p.get("contracts", 0)),
-                    unrealized_pnl=float(p.get("unrealizedPnl", 0)),
-                    take_profit=None,
-                    stop_loss=None,
-                    mode="FUTURES",
-                ))
+        for asset, info in raw.items():
+            if not isinstance(info, dict) or "free" not in info:
+                continue
+            free = float(info["free"])
+            if asset in _QUOTE_ASSETS or free <= 0:
+                continue
+            symbol = f"{asset}/USDT"
+            positions.append(Position(
+                symbol=symbol,
+                side="LONG",
+                entry_price=self._entry_prices.get(symbol, 0.0),
+                quantity=free,
+                unrealized_pnl=0.0,
+                take_profit=None,
+                stop_loss=None,
+                mode="SPOT",
+            ))
         return positions
 
     async def get_balance(self) -> dict[str, float]:

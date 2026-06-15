@@ -121,6 +121,51 @@ async def test_get_strategies(client):
     assert isinstance(resp.json(), list)
 
 
+# ── M1: control endpoints require API key when API_KEY is set ────────────────
+
+@pytest.mark.asyncio
+async def test_control_endpoint_rejects_without_api_key(monkeypatch):
+    monkeypatch.setenv("API_KEY", "s3cret")
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post("/api/strategies/rsi_macd/stop")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_control_endpoint_accepts_with_api_key(monkeypatch):
+    monkeypatch.setenv("API_KEY", "s3cret")
+    controller = MagicMock()
+    controller.pause = AsyncMock()
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo, controller=controller)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post("/api/strategies/rsi_macd/stop", headers={"X-API-Key": "s3cret"})
+    assert resp.status_code == 200
+    controller.pause.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_control_endpoint_open_when_no_api_key(monkeypatch):
+    """No API_KEY configured → control allowed (server is expected to be localhost-bound)."""
+    monkeypatch.delenv("API_KEY", raising=False)
+    controller = MagicMock()
+    controller.resume = AsyncMock()
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo, controller=controller)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post("/api/strategies/rsi_macd/start")
+    assert resp.status_code == 200
+    controller.resume.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_get_pnl(client):
     resp = await client.get("/api/pnl")

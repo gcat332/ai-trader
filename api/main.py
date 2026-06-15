@@ -3,15 +3,26 @@ import asyncio
 import json
 import os
 from datetime import date
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from db.repository import Repository
 from api import bus
 
 
-def create_app(repo: Repository, exchange=None) -> FastAPI:
+async def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    """Gate on the API_KEY env var. When set, mutating control endpoints require a
+    matching X-API-Key header. When unset, control is allowed (the server should be
+    bound to localhost in that case — see API_HOST in main.py)."""
+    expected = os.getenv("API_KEY", "")
+    if expected and x_api_key != expected:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
     app = FastAPI(title="AI Trader API")
-    origins = os.getenv("CORS_ORIGINS", "*").split(",")
+    # Default to local dashboard dev origins, not "*" — the API exposes financial
+    # data and trading controls. Override with CORS_ORIGINS for other origins.
+    origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
@@ -50,14 +61,28 @@ def create_app(repo: Repository, exchange=None) -> FastAPI:
 
     @app.get("/api/strategies")
     async def get_strategies():
-        return [{"id": "rsi_macd", "status": "stopped"}]
+        # Report the real engine state, not a hardcoded placeholder. Without a
+        # controller (read-only API server) status is genuinely unknown.
+        if controller is None:
+            return [{"id": "unknown", "status": "unknown"}]
+        status = await controller.get_status()
+        return [{
+            "id": status.get("strategy_id", "unknown"),
+            "status": "running" if status.get("running") else "stopped",
+        }]
 
-    @app.post("/api/strategies/{strategy_id}/start")
+    @app.post("/api/strategies/{strategy_id}/start", dependencies=[Depends(require_api_key)])
     async def start_strategy(strategy_id: str):
-        return {"id": strategy_id, "status": "started"}
+        if controller is None:
+            raise HTTPException(status_code=503, detail="Engine control not available on this server")
+        await controller.resume()
+        return {"id": strategy_id, "status": "running"}
 
-    @app.post("/api/strategies/{strategy_id}/stop")
+    @app.post("/api/strategies/{strategy_id}/stop", dependencies=[Depends(require_api_key)])
     async def stop_strategy(strategy_id: str):
+        if controller is None:
+            raise HTTPException(status_code=503, detail="Engine control not available on this server")
+        await controller.pause()
         return {"id": strategy_id, "status": "stopped"}
 
     @app.get("/api/trades/history")
@@ -83,9 +108,11 @@ def create_app(repo: Repository, exchange=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Backtest run not found")
         return run
 
-    @app.post("/api/backtest/run")
+    @app.post("/api/backtest/run", dependencies=[Depends(require_api_key)])
     async def trigger_backtest(body: dict):
-        return {"status": "queued", "run_id": "placeholder"}
+        # Not yet wired to BacktestRunner. Return an honest 501 rather than a fake
+        # "queued" placeholder that misleads the operator into thinking a run started.
+        raise HTTPException(status_code=501, detail="Backtest trigger not implemented; run via CLI")
 
     @app.get("/api/compare")
     async def compare(strategy: str, from_date: str | None = None, to_date: str | None = None):

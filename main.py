@@ -92,6 +92,13 @@ async def run():
 
     paper_mode = os.getenv("PAPER_TRADING", "false").lower() == "true"
 
+    # Fail fast on missing secrets instead of crashing on the first signed API call.
+    settings.validate(
+        paper_mode=paper_mode,
+        strategy_mode=os.getenv("STRATEGY_MODE", "rule_based"),
+        arbiter_mode=os.getenv("ARBITER_MODE", "rule"),
+    )
+
     if paper_mode:
         exchange = PaperExchange(initial_balance={"USDT": 10000.0})
         logger.info("Starting in PAPER TRADING mode")
@@ -135,8 +142,24 @@ async def run():
             timeframe="1h",
             risk_manager=risk_manager,
             repo=repo,
+            state_path=os.getenv("ENGINE_STATE_PATH", "db/engine_state.json"),
         )
         engine.is_running = True
+
+        # Startup reconciliation: surface any open position the exchange holds that we
+        # have no tracked decision for (e.g. opened before a crash). It will still be
+        # protected by its exchange-side OCO, but the outcome won't be attributable.
+        try:
+            open_positions = await exchange.get_positions()
+            tracked = set(engine._active_decisions)
+            for p in open_positions:
+                if p.symbol not in tracked:
+                    logger.warning(
+                        f"Reconcile: untracked open position {p.symbol} qty={p.quantity} "
+                        "(no decision record — outcome will not be attributed)"
+                    )
+        except Exception as e:
+            logger.error(f"Startup reconciliation failed: {e}")
 
         balance = await exchange.get_balance()
         daily_start = balance.get("USDT", 10000.0)
@@ -155,7 +178,7 @@ async def run():
             await notifier.start()
             logger.info("Telegram bot started")
 
-        app = create_app(repo, exchange=exchange)
+        app = create_app(repo, exchange=exchange, controller=controller)
 
         async def trading_loop():
             from datetime import date
@@ -163,9 +186,12 @@ async def run():
             from strategy.regime import RegimeClassifier
             from core.strategy_arbiter import StrategyArbiter
             from core.live_outcome_tracker import LiveOutcomeTracker
-            fetcher = DataFetcher(
-                exchange_id="binance",
-                testnet=settings.binance_testnet if not paper_mode else True,
+            # Single data source. Live: reuse the trading exchange's ccxt client so
+            # candle fetches and order/balance calls share ONE connection and rate
+            # limiter (no second client silently racing the limit). Paper: the
+            # PaperExchange can't fetch, so use a real-market DataFetcher.
+            data_source = exchange if not paper_mode else DataFetcher(
+                exchange_id="binance", testnet=True,
             )
             last_reset_date = None
             consecutive_failures = 0
@@ -204,7 +230,7 @@ async def run():
                         last_reset_date = today
 
                     if engine.is_running:
-                        candles = await fetcher.fetch_ohlcv("BTC/USDT", "1h", limit=100)
+                        candles = await data_source.fetch_ohlcv("BTC/USDT", "1h", limit=100)
                         # Mark-to-market equity = free USDT + value of open positions at the
                         # latest close. We use equity (not free USDT alone) because an open
                         # position's unrealized loss must count toward the daily drawdown —
@@ -219,13 +245,15 @@ async def run():
                         await engine.process_candles(candles)
                         consecutive_failures = 0
 
-                        # Record live trade closes so drift profiles have real data.
-                        if isinstance(strategy, MetaStrategy):
-                            positions_now = await exchange.get_positions()
-                            for trade in outcome_tracker.detect_closed(positions_now, last_close):
-                                await engine.record_trade_outcome(trade)  # stamps trade.strategy_id
-                                await repo.insert_trade(trade)  # persist to live trade log (Trade History/Compare)
-                            outcome_tracker.snapshot(await exchange.get_positions())
+                        # Record live trade closes so drift profiles, PnL, and Trade
+                        # History have real data — in EVERY strategy mode, not just multi.
+                        # A stop/TP fill shrinks the spot balance; detect_closed diffs
+                        # snapshots to synthesize the closed TradeRecord.
+                        positions_now = await exchange.get_positions()
+                        for trade in outcome_tracker.detect_closed(positions_now, last_close):
+                            await engine.record_trade_outcome(trade)  # stamps trade.strategy_id
+                            await repo.insert_trade(trade)  # persist to live trade log (Trade History/Compare)
+                        outcome_tracker.snapshot(await exchange.get_positions())
 
                         # Drift check every N candles (configurable via DRIFT_CHECK_INTERVAL env var)
                         _drift_tick = getattr(trading_loop, "_drift_tick", 0) + 1
@@ -320,18 +348,39 @@ async def run():
                                                 min_trades=int(os.getenv("AB_MIN_TRADES", "50")),
                                             )
                                             engine._ab_tester = ab_tester
+                    loop_errored = False
                 except Exception as e:
+                    loop_errored = True
                     consecutive_failures += 1
                     logger.error(f"Engine loop error (attempt {consecutive_failures}): {e}")
                     if consecutive_failures >= 5 and notifier:
                         await notifier.send("⚠️ Data feed lost — 5 consecutive failures, trading paused")
                         engine.is_running = False
 
-                # Poll faster while paused so /resume takes effect quickly; otherwise
-                # run once per closed hourly candle.
-                await asyncio.sleep(10 if not engine.is_running else 3600)
+                # Sleep policy:
+                #  - paused: poll fast so /resume takes effect quickly
+                #  - errored: short backoff so 5 consecutive failures trip in minutes,
+                #    not ~5 hours (sleeping a full candle between failures hid outages)
+                #  - healthy: once per closed hourly candle
+                if not engine.is_running:
+                    delay = 10
+                elif loop_errored:
+                    delay = int(os.getenv("ERROR_BACKOFF_SECONDS", "30"))
+                else:
+                    delay = 3600
+                await asyncio.sleep(delay)
 
-        config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="warning")
+        # Bind localhost by default so the trading-control API is not reachable from
+        # the network. Set API_HOST=0.0.0.0 for remote access — and set API_KEY too,
+        # or the control endpoints are exposed unauthenticated.
+        api_host = os.getenv("API_HOST", "127.0.0.1")
+        api_port = int(os.getenv("API_PORT", "8000"))
+        if api_host not in ("127.0.0.1", "localhost") and not os.getenv("API_KEY"):
+            logger.warning(
+                f"API bound to {api_host} with no API_KEY set — trading controls are "
+                "exposed unauthenticated. Set API_KEY or bind to localhost."
+            )
+        config = uvicorn.Config(app, host=api_host, port=api_port, log_level="warning")
         server = uvicorn.Server(config)
 
         # return_exceptions=True so a fatal error in one task does not cancel the other

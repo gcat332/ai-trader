@@ -61,9 +61,15 @@ class RiskManager:
             self._last_rejection_reason = "low_confidence"
             return None
 
-        usdt = balance.get("USDT", 0.0)
-        scaled_pct = self._max_position_pct * signal.confidence
-        quantity = round((usdt * scaled_pct) / signal.entry_price, 8)
+        if signal.side == "SELL":
+            # Exit order: sell exactly what is held, not a fresh 5% notional slice.
+            # The position is guaranteed to exist (sell_no_position gate above).
+            pos = next((p for p in positions if p.symbol == signal.symbol), None)
+            quantity = pos.quantity if pos else 0.0
+        else:
+            usdt = balance.get("USDT", 0.0)
+            scaled_pct = self._max_position_pct * signal.confidence
+            quantity = round((usdt * scaled_pct) / signal.entry_price, 8)
         if quantity <= 0:
             self._last_rejection_reason = "zero_quantity"
             return None

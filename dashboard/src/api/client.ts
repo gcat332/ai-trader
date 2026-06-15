@@ -2,7 +2,13 @@
 import axios from "axios";
 import { useQuery, useMutation } from "@tanstack/react-query";
 
-const api = axios.create({ baseURL: "/api" });
+// Attach X-API-Key when VITE_API_KEY is configured (required for control
+// endpoints when the backend has API_KEY set). Empty/undefined → header omitted.
+const apiKey = import.meta.env.VITE_API_KEY;
+const api = axios.create({
+  baseURL: "/api",
+  headers: apiKey ? { "X-API-Key": apiKey } : {},
+});
 
 export type Trade = {
   id: number; symbol: string; side: string;
