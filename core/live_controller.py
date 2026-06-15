@@ -22,6 +22,10 @@ class LiveEngineController(EngineController):
         return {
             "running": self._engine.is_running,
             "strategy_id": getattr(self._engine.strategy, "strategy_id", "unknown"),
+            # In multi mode the strategy is a MetaStrategy holding several techniques
+            # with one active at a time (arbiter-managed). Expose the full set so the
+            # dashboard shows all of them, not just the active one.
+            "techniques": getattr(self._engine.strategy, "strategy_ids", None),
             "open_positions": [
                 {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
                 for p in positions

@@ -64,12 +64,27 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
         # Report the real engine state, not a hardcoded placeholder. Without a
         # controller (read-only API server) status is genuinely unknown.
         if controller is None:
-            return [{"id": "unknown", "status": "unknown"}]
+            return [{"id": "unknown", "status": "unknown", "active": False}]
         status = await controller.get_status()
-        return [{
-            "id": status.get("strategy_id", "unknown"),
-            "status": "running" if status.get("running") else "stopped",
-        }]
+        active = status.get("strategy_id", "unknown")
+        running = status.get("running")
+        # In multi mode, list every technique (arbiter-managed) and flag the active
+        # one; in single mode this is just the one strategy.
+        techniques = status.get("techniques") or [active]
+        return [
+            {
+                "id": t,
+                "active": t == active,
+                "status": ("active" if t == active else "idle") if running else "stopped",
+            }
+            for t in techniques
+        ]
+
+    @app.get("/api/strategies/available")
+    async def get_available_strategies():
+        # The strategy ids that can be backtested / compared. Mirrors the builders
+        # in the backtest/run handler. Static set — the bot is Binance-spot only.
+        return ["rsi_macd", "bollinger_reversion", "ema_cross"]
 
     @app.post("/api/strategies/{strategy_id}/start", dependencies=[Depends(require_api_key)])
     async def start_strategy(strategy_id: str):
@@ -110,9 +125,69 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
 
     @app.post("/api/backtest/run", dependencies=[Depends(require_api_key)])
     async def trigger_backtest(body: dict):
-        # Not yet wired to BacktestRunner. Return an honest 501 rather than a fake
-        # "queued" placeholder that misleads the operator into thinking a run started.
-        raise HTTPException(status_code=501, detail="Backtest trigger not implemented; run via CLI")
+        import uuid
+        from datetime import datetime, timezone
+        from backtest.runner import BacktestRunner
+        from backtest.reporter import BacktestReporter
+        from data.fetcher import DataFetcher
+        from risk.manager import RiskManager
+        from strategy.ml.dummy_model import DummyModel
+        from strategy.rsi_macd import RsiMacdStrategy
+        from strategy.bollinger_reversion import BollingerReversionStrategy
+        from strategy.ema_cross import EmaCrossStrategy
+
+        strategy_id = body.get("strategy_id", "rsi_macd")
+        symbol = body.get("symbol", "BTC/USDT")
+        from_date = body.get("from_date") or ""
+        to_date = body.get("to_date") or ""
+        timeframe = body.get("timeframe", "1h")
+
+        builders = {
+            "rsi_macd": lambda: RsiMacdStrategy(ml_model=DummyModel(0.75)),
+            "bollinger_reversion": lambda: BollingerReversionStrategy(ml_model=DummyModel(0.75)),
+            "ema_cross": lambda: EmaCrossStrategy(ml_model=DummyModel(0.75)),
+        }
+        if strategy_id not in builders:
+            raise HTTPException(status_code=422,
+                detail=f"unknown strategy_id {strategy_id!r}; valid: {list(builders)}")
+
+        # Pull recent candles, then keep only those inside the requested [from, to]
+        # window. Data availability is bounded by the configured exchange (testnet
+        # holds a limited recent history), so a range outside it yields fewer/no
+        # candles — reflected honestly in the result rather than faked.
+        fetcher = DataFetcher(exchange_id="binance", testnet=True)
+        try:
+            candles = await fetcher.fetch_ohlcv(symbol, timeframe, limit=500)
+        finally:
+            await fetcher.close()
+
+        def _ms(d: str, end: bool) -> int | None:
+            if not d:
+                return None
+            dt = datetime.fromisoformat(d).replace(tzinfo=timezone.utc)
+            if end:
+                dt = dt.replace(hour=23, minute=59, second=59)
+            return int(dt.timestamp() * 1000)
+
+        lo, hi = _ms(from_date, False), _ms(to_date, True)
+        if lo is not None:
+            candles = [c for c in candles if c[0] >= lo]
+        if hi is not None:
+            candles = [c for c in candles if c[0] <= hi]
+
+        # on_candle (the CPU-heavy pandas-ta path) is already offloaded to a thread
+        # inside engine.process_candles (engine.py:157), so this replay yields the
+        # event loop every candle and does not block the live trading loop / ws feed.
+        runner = BacktestRunner(
+            strategy=builders[strategy_id](), risk_manager=RiskManager(),
+            initial_balance={"USDT": 10000.0}, symbol=symbol, timeframe=timeframe,
+        )
+        trades = await runner.run(candles)
+        stats = BacktestReporter(trades).compute()
+
+        run_id = str(uuid.uuid4())
+        await repo.insert_backtest_run(run_id, strategy_id, symbol, from_date, to_date, stats)
+        return {"run_id": run_id, "candles": len(candles), **stats}
 
     @app.get("/api/compare")
     async def compare(strategy: str, from_date: str | None = None, to_date: str | None = None):

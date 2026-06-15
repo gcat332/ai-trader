@@ -121,6 +121,13 @@ async def test_get_strategies(client):
     assert isinstance(resp.json(), list)
 
 
+@pytest.mark.asyncio
+async def test_available_strategies_lists_all_techniques(client):
+    resp = await client.get("/api/strategies/available")
+    assert resp.status_code == 200
+    assert set(resp.json()) == {"rsi_macd", "bollinger_reversion", "ema_cross"}
+
+
 # ── M1: control endpoints require API key when API_KEY is set ────────────────
 
 @pytest.mark.asyncio
@@ -185,3 +192,40 @@ async def test_get_trade_history_with_symbol_filter(client):
 async def test_get_nonexistent_backtest_run_returns_404(client):
     resp = await client.get("/api/backtest/nonexistent-id")
     assert resp.status_code == 404
+
+
+# ── /api/backtest/run wired to BacktestRunner (no longer a 501 stub) ──────────
+
+@pytest.mark.asyncio
+async def test_backtest_run_executes_persists_and_returns_stats(client, monkeypatch):
+    """POST runs a real backtest (data source mocked), returns reporter stats, and
+    persists a row to history."""
+    import data.fetcher as fetcher_mod
+    candles, ts, price = [], 1_700_000_000_000, 30000.0
+    for i in range(150):
+        price *= 1.01 if i % 9 < 4 else 0.98
+        candles.append([ts + i * 3_600_000, price, price * 1.02, price * 0.98, price, 100.0])
+    fake = MagicMock()
+    fake.fetch_ohlcv = AsyncMock(return_value=candles)
+    fake.close = AsyncMock()
+    monkeypatch.setattr(fetcher_mod, "DataFetcher", lambda *a, **k: fake)
+
+    resp = await client.post(
+        "/api/backtest/run",
+        json={"strategy_id": "bollinger_reversion", "symbol": "BTC/USDT"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    for k in ("run_id", "total_trades", "total_pnl", "win_rate", "max_drawdown", "sharpe_ratio"):
+        assert k in data
+    fake.fetch_ohlcv.assert_awaited_once()
+
+    hist = (await client.get("/api/backtest/history")).json()
+    assert len(hist) == 1
+    assert hist[0]["strategy_id"] == "bollinger_reversion"
+
+
+@pytest.mark.asyncio
+async def test_backtest_run_rejects_unknown_strategy(client):
+    resp = await client.post("/api/backtest/run", json={"strategy_id": "nope"})
+    assert resp.status_code == 422
