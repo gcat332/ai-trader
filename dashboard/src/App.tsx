@@ -1,22 +1,24 @@
 // dashboard/src/App.tsx
 import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
-import { BarChart2, Clock, FlaskConical, GitCompare, Search, Bell, Mail, Activity } from "lucide-react";
+import { BarChart2, Clock, FlaskConical, GitCompare, Activity } from "lucide-react";
 import LiveTrading from "./pages/LiveTrading";
 import TradeHistory from "./pages/TradeHistory";
 import Backtest from "./pages/Backtest";
 import Compare from "./pages/Compare";
 import StrategyHealth from "./pages/StrategyHealth";
+import { ToastProvider } from "./components/Toast";
 
 const navItems = [
   { to: "/", label: "Live", icon: BarChart2, end: true },
   { to: "/history", label: "History", icon: Clock, end: false },
   { to: "/backtest", label: "Backtest", icon: FlaskConical, end: false },
   { to: "/compare", label: "Compare", icon: GitCompare, end: false },
-  { to: "/health", label: "Health", icon: Activity, end: false },
+  { to: "/health", label: "AI Decisions", icon: Activity, end: false },
 ];
 
 export default function App() {
   return (
+    <ToastProvider>
     <BrowserRouter>
       <div className="flex min-h-screen bg-gray-50">
         {/* Sidebar */}
@@ -52,34 +54,14 @@ export default function App() {
               </NavLink>
             ))}
           </nav>
-
-          {/* Account section */}
-          <p className="px-4 pt-6 pb-2 text-xs font-semibold text-gray-400 uppercase tracking-widest">
-            Account
-          </p>
         </aside>
 
         {/* Main area */}
         <div className="flex flex-col flex-1 min-w-0">
           {/* Top Header */}
-          <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 flex-shrink-0">
-            {/* Search */}
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                className="pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 placeholder-gray-400 w-64 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Search..."
-              />
-            </div>
-
-            {/* Right: notifications + user */}
-            <div className="flex items-center gap-4">
-              <button className="text-gray-400 hover:text-gray-600">
-                <Mail className="w-5 h-5" />
-              </button>
-              <button className="text-gray-400 hover:text-gray-600">
-                <Bell className="w-5 h-5" />
-              </button>
+          <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-end px-6 flex-shrink-0">
+            {/* Branding only — search/notifications were non-functional placeholders */}
+            <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white text-xs font-bold">
                 AT
               </div>
@@ -100,5 +82,6 @@ export default function App() {
         </div>
       </div>
     </BrowserRouter>
+    </ToastProvider>
   );
 }
