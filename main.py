@@ -64,10 +64,21 @@ def _build_strategy() -> BaseStrategy:
                 confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.60")),
             )
 
+        case "multi":
+            from strategy.bollinger_reversion import BollingerReversionStrategy
+            from strategy.ema_cross import EmaCrossStrategy
+            from strategy.meta_strategy import MetaStrategy
+            techniques = {
+                "rsi_macd": gatekeeper,
+                "bollinger_reversion": BollingerReversionStrategy(ml_model=DummyModel(confidence=0.75)),
+                "ema_cross": EmaCrossStrategy(ml_model=DummyModel(confidence=0.75)),
+            }
+            return MetaStrategy(techniques, active=os.getenv("DEFAULT_STRATEGY", "rsi_macd"))
+
         case _:
             raise ValueError(
                 f"Unknown STRATEGY_MODE={mode!r}. "
-                "Valid: rule_based, hybrid, claude_ai"
+                "Valid: rule_based, hybrid, claude_ai, multi"
             )
 
 
@@ -148,12 +159,28 @@ async def run():
 
         async def trading_loop():
             from datetime import date
+            from strategy.meta_strategy import MetaStrategy
+            from strategy.regime import RegimeClassifier
+            from core.strategy_arbiter import StrategyArbiter
+            from core.live_outcome_tracker import LiveOutcomeTracker
             fetcher = DataFetcher(
                 exchange_id="binance",
                 testnet=settings.binance_testnet if not paper_mode else True,
             )
             last_reset_date = None
             consecutive_failures = 0
+
+            # Multi-mode components (only used when strategy is a MetaStrategy)
+            outcome_tracker = LiveOutcomeTracker()
+            arbiter = (
+                StrategyArbiter(
+                    strategies=strategy.strategy_ids,
+                    swap_margin=float(os.getenv("SWAP_MARGIN", "0.10")),
+                    min_regime_samples=int(os.getenv("MIN_REGIME_SAMPLES", "20")),
+                    epsilon=float(os.getenv("STRATEGY_EPSILON", "0.10")),
+                )
+                if isinstance(strategy, MetaStrategy) else None
+            )
 
             while True:
                 # Whole loop body is wrapped so any transient failure (balance fetch,
@@ -184,16 +211,55 @@ async def run():
                         await engine.process_candles(candles)
                         consecutive_failures = 0
 
+                        # Record live trade closes so drift profiles have real data.
+                        if isinstance(strategy, MetaStrategy):
+                            positions_now = await exchange.get_positions()
+                            for trade in outcome_tracker.detect_closed(positions_now, last_close):
+                                await engine.record_trade_outcome(trade)
+                            outcome_tracker.snapshot(await exchange.get_positions())
+
                         # Drift check every N candles (configurable via DRIFT_CHECK_INTERVAL env var)
                         _drift_tick = getattr(trading_loop, "_drift_tick", 0) + 1
                         trading_loop._drift_tick = _drift_tick
 
                         drift_interval = int(os.getenv("DRIFT_CHECK_INTERVAL", "10"))
 
+                        if isinstance(strategy, MetaStrategy):
+                            # Regime-aware arbitration replaces the Phase-9 retrain block
+                            # when running in multi mode.
+                            if _drift_tick % drift_interval == 0:
+                                event = await drift_detector.check(repo)
+                                if event is not None:
+                                    if notifier:
+                                        await notifier.send_drift_alert(event)
+                                    import pandas as pd
+                                    df_candles = pd.DataFrame(
+                                        candles,
+                                        columns=["timestamp", "open", "high", "low", "close", "volume"],
+                                    )
+                                    current_regime = RegimeClassifier().classify(df_candles)
+                                    profiles = await repo.get_strategy_profiles()
+                                    last_switch = await repo.get_last_switch_time()
+                                    if last_switch is None or _cooldown_elapsed(
+                                        last_switch,
+                                        days=int(os.getenv("SWAP_COOLDOWN_DAYS", "1")),
+                                    ):
+                                        decision = arbiter.decide(current_regime, strategy.active, profiles)
+                                        await repo.insert_strategy_switch(decision)
+                                        if notifier:
+                                            await notifier.send_strategy_switch(decision)
+                                        if decision.decision in ("SWAP", "EXPLORE"):
+                                            strategy.set_active(decision.to_strategy)
+                                        elif decision.decision == "RETRAIN" and hasattr(strategy, "ml_model"):
+                                            model = await retrainer.retrain(repo)
+                                            if model is not None:
+                                                strategy.ml_model = model
+
                         # ML retrain + A/B test only applies when strategy has an ml_model
                         # (i.e. rule_based / RsiMacdStrategy). HybridStrategy and
                         # ClaudeStrategy do not expose ml_model — skip this block entirely.
-                        if hasattr(strategy, "ml_model"):
+                        # When running in multi mode, the arbiter block above handles decisions.
+                        elif hasattr(strategy, "ml_model"):
                             # If an A/B test is in progress, periodically evaluate it.
                             # evaluate() is a no-op (returns None) until min_trades of
                             # real champion outcomes have accumulated, so this is safe
