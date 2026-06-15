@@ -1,6 +1,6 @@
 # core/engine.py
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 from core.models import DecisionRecord, Order, Signal, TradeRecord
 from exchange.base import Exchange
@@ -139,7 +139,7 @@ class Engine:
             return decision_id
         rec = DecisionRecord(
             id=decision_id,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             symbol=signal.symbol,
             strategy_id=signal.strategy_id,
             signal_side=signal.side,

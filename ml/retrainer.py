@@ -2,7 +2,7 @@
 import os
 import pickle
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from ml.base_model import BaseMLModel
 
@@ -14,7 +14,7 @@ class _LogisticModel(BaseMLModel):
         self._scaler = scaler
         self._feature_names = feature_names
         self._holdout_accuracy = holdout_acc
-        self.model_id = f"logreg_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        self.model_id = f"logreg_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
     def predict(self, features: dict[str, float]) -> float:
         x = [[features.get(k, 0.0) for k in self._feature_names]]

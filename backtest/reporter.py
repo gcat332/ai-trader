@@ -52,6 +52,14 @@ class BacktestReporter:
 
     @staticmethod
     def _calc_max_drawdown(pnls: list[float]) -> float:
+        """Compute the maximum drawdown from the per-trade PnL series.
+
+        v1 modeling assumptions:
+        - ``peak`` is initialised to 0 (i.e., initial capital baseline), so any
+          cumulative loss from the very first trade counts as drawdown even if
+          there was never a positive peak.
+        - Returns a non-positive float; 0.0 means no drawdown occurred.
+        """
         peak = 0.0
         cumulative = 0.0
         max_dd = 0.0
@@ -66,6 +74,18 @@ class BacktestReporter:
 
     @staticmethod
     def _calc_sharpe(pnls: list[float], periods_per_year: int = 365 * 24) -> float:
+        """Compute an annualised Sharpe ratio from the per-trade PnL series.
+
+        v1 modeling assumptions:
+        - The return series is raw per-trade PnL in quote currency (e.g. USDT),
+          not percentage returns. This makes the ratio scale-dependent on
+          position size — it is useful for relative comparison between runs but
+          not directly comparable to a conventional Sharpe computed on % returns.
+        - Annualisation factor ``sqrt(365 * 24)`` assumes each trade corresponds
+          to roughly one hourly period. For strategies with very different average
+          holding times the factor should be adjusted accordingly.
+        - Risk-free rate is assumed to be zero (typical for crypto backtests).
+        """
         if len(pnls) < 2:
             return 0.0
         mean = sum(pnls) / len(pnls)

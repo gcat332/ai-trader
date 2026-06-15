@@ -1,6 +1,6 @@
 # tests/test_risk_manager.py
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from core.models import Signal, Position
 from risk.manager import RiskManager
 
@@ -15,7 +15,7 @@ def _buy_signal(confidence: float = 0.8, stop_loss: float | None = 63500.0) -> S
         trailing_sl=False,
         confidence=confidence,
         strategy_id="rsi_macd",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )
 
 
@@ -52,7 +52,7 @@ def test_hold_signal_returns_none(risk):
     sig = Signal(
         symbol="BTC/USDT", side="HOLD", entry_price=65000.0,
         take_profit=None, stop_loss=None, trailing_sl=False,
-        confidence=0.5, strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+        confidence=0.5, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
     )
     assert risk.evaluate(sig, {"USDT": 10000.0}, []) is None
 
@@ -95,7 +95,7 @@ def test_sell_without_position_returns_none(risk):
     sell_signal = Signal(
         symbol="BTC/USDT", side="SELL", entry_price=65000.0,
         take_profit=63000.0, stop_loss=67000.0, trailing_sl=False,
-        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
     )
     assert risk.evaluate(sell_signal, {"USDT": 10000.0}, []) is None
 
@@ -104,7 +104,7 @@ def test_sell_with_existing_position_allowed(risk):
     sell_signal = Signal(
         symbol="BTC/USDT", side="SELL", entry_price=65000.0,
         take_profit=63000.0, stop_loss=67000.0, trailing_sl=False,
-        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
     )
     pos = _open_position("BTC/USDT")
     assert risk.evaluate(sell_signal, {"USDT": 10000.0}, [pos]) is not None
@@ -120,7 +120,7 @@ def test_correlation_filter_blocks_eth_when_btc_open(risk):
     eth_signal = Signal(
         symbol="ETH/USDT", side="BUY", entry_price=3500.0,
         take_profit=3605.0, stop_loss=3430.0, trailing_sl=False,
-        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
     )
     assert risk.evaluate(eth_signal, {"USDT": 10000.0}, [btc_pos]) is None
 

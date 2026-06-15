@@ -1,7 +1,7 @@
 # tests/test_telegram.py
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
+from datetime import datetime, timezone
 from core.models import Signal, Order
 from notifier.telegram import TelegramNotifier, format_signal_alert, format_order_alert
 
@@ -13,7 +13,7 @@ def test_format_buy_signal_alert():
         symbol="BTC/USDT", side="BUY", entry_price=65230.0,
         take_profit=67000.0, stop_loss=63500.0,
         trailing_sl=False, confidence=0.88,
-        strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+        strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
     )
     text = format_signal_alert(signal)
     assert "BUY" in text
@@ -28,7 +28,7 @@ def test_format_sell_signal_alert():
         symbol="ETH/USDT", side="SELL", entry_price=3500.0,
         take_profit=3300.0, stop_loss=3600.0,
         trailing_sl=False, confidence=0.75,
-        strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+        strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
     )
     text = format_signal_alert(signal)
     assert "SELL" in text
@@ -130,7 +130,7 @@ def test_format_buy_signal_includes_narrative():
         symbol="BTC/USDT", side="BUY", entry_price=65230.0,
         take_profit=67000.0, stop_loss=63500.0,
         trailing_sl=False, confidence=0.88,
-        strategy_id="rsi_macd", timestamp=datetime.utcnow(),
+        strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
         narrative="RSI=24.3 (oversold) | MACD bullish crossover | ML 88% → BUY placed",
     )
     text = format_signal_alert(signal)
@@ -191,3 +191,17 @@ def test_format_retrain_complete():
     text = format_retrain_complete(holdout_accuracy=0.72, model_id="logreg_20260112")
     assert "72" in text or "72%" in text
     assert "retrain" in text.lower() or "model" in text.lower()
+
+
+# ── Fix 2: send() warns when bot not started ─────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_send_when_app_none_does_not_raise_and_logs_warning(caplog):
+    """send() on an unstarted notifier must not raise and must emit a warning."""
+    import logging
+    notifier = TelegramNotifier(token="fake", chat_id="123", controller=MagicMock())
+    assert notifier._app is None
+    with caplog.at_level(logging.WARNING, logger="notifier.telegram"):
+        await notifier.send("hello")
+    assert any("not started" in r.message.lower() or "bot" in r.message.lower()
+               for r in caplog.records), "Expected a warning log when bot is not started"

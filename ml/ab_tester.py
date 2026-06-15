@@ -1,7 +1,7 @@
 # ml/ab_tester.py
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from ml.base_model import BaseMLModel
 
 
@@ -41,7 +41,7 @@ class ModelABTester:
         # _challenger_pnl for the mean-PnL t-test).
         self._challenger_took: list[bool] = []
         self._shadow_count: int = 0
-        self._start_time = datetime.utcnow()
+        self._start_time = datetime.now(timezone.utc)
         self._run_id = str(uuid.uuid4())[:8]
 
     @property
@@ -121,7 +121,7 @@ class ModelABTester:
         run = {
             "id": self._run_id,
             "start_time": self._start_time.isoformat(),
-            "end_time": datetime.utcnow().isoformat(),
+            "end_time": datetime.now(timezone.utc).isoformat(),
             "champion_id": getattr(self._champion, "model_id", "champion"),
             "challenger_id": getattr(self._challenger, "model_id", "challenger"),
             "champion_win_rate": champion_win_rate,

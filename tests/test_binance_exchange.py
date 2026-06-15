@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, call
 from core.models import Order
 from exchange.binance import BinanceExchange
 
@@ -72,3 +72,95 @@ async def test_get_balance(exchange):
 async def test_get_positions_empty(exchange):
     positions = await exchange.get_positions()
     assert isinstance(positions, list)
+
+
+# ── Fix 4: OCO stop-limit slippage buffer ────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_oco_sell_stop_limit_price_is_below_stop_price():
+    """For a SELL OCO (long exit) stopLimitPrice must be < stopPrice by the buffer."""
+    with patch("exchange.binance.ccxt.binance") as MockBinance:
+        mock_ccxt = MagicMock()
+        mock_ccxt.create_oco_order = AsyncMock(return_value={
+            "orderListId": "oco-002",
+        })
+        mock_ccxt.amount_to_precision = MagicMock(return_value="0.01")
+        mock_ccxt.set_sandbox_mode = MagicMock()
+        MockBinance.return_value = mock_ccxt
+
+        exch = BinanceExchange(api_key="test", api_secret="test", testnet=True)
+
+        order = Order(
+            id="ord-oco-sell", symbol="BTC/USDT", side="SELL", type="OCO",
+            quantity=0.01, price=67000.0, status="PENDING", exchange_order_id=None,
+        )
+        stop_price = 63500.0
+        await exch.place_order(order, stop_price=stop_price)
+
+        call_kwargs = mock_ccxt.create_oco_order.call_args.kwargs
+        assert "stopPrice" in call_kwargs, "stopPrice must be passed"
+        assert "stopLimitPrice" in call_kwargs, "stopLimitPrice must be passed"
+        # For SELL OCO the stop-limit must be BELOW the stop trigger
+        assert call_kwargs["stopLimitPrice"] < call_kwargs["stopPrice"], (
+            f"stopLimitPrice {call_kwargs['stopLimitPrice']} must be < stopPrice "
+            f"{call_kwargs['stopPrice']} for SELL OCO"
+        )
+        expected_buffer = exch.oco_stop_limit_buffer
+        assert abs(call_kwargs["stopLimitPrice"] - stop_price * (1 - expected_buffer)) < 0.01
+
+
+# ── Fix 5: amount_to_precision rounding ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_place_order_uses_precision_rounded_amount():
+    """place_order must pass the amount_to_precision result to the exchange create call."""
+    with patch("exchange.binance.ccxt.binance") as MockBinance:
+        mock_ccxt = MagicMock()
+        mock_ccxt.create_order = AsyncMock(return_value={
+            "id": "ex-prec-001", "status": "closed",
+        })
+        mock_ccxt.amount_to_precision = MagicMock(return_value="0.01")
+        mock_ccxt.set_sandbox_mode = MagicMock()
+        MockBinance.return_value = mock_ccxt
+
+        exch = BinanceExchange(api_key="test", api_secret="test", testnet=True)
+        order = Order(
+            id="ord-prec", symbol="BTC/USDT", side="BUY", type="MARKET",
+            quantity=0.012345, price=None, status="PENDING", exchange_order_id=None,
+        )
+        await exch.place_order(order)
+
+        # amount_to_precision should have been called with the original quantity
+        mock_ccxt.amount_to_precision.assert_called_once_with("BTC/USDT", 0.012345)
+        # The create_order call should use the precision-rounded amount (0.01)
+        create_kwargs = mock_ccxt.create_order.call_args
+        actual_amount = create_kwargs.kwargs.get("amount") or create_kwargs.args[3]
+        assert actual_amount == pytest.approx(0.01), (
+            f"Expected precision-rounded amount 0.01, got {actual_amount}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_place_order_falls_back_to_original_quantity_when_precision_raises():
+    """If amount_to_precision raises, place_order must still submit with original quantity."""
+    with patch("exchange.binance.ccxt.binance") as MockBinance:
+        mock_ccxt = MagicMock()
+        mock_ccxt.create_order = AsyncMock(return_value={
+            "id": "ex-fallback-001", "status": "closed",
+        })
+        mock_ccxt.amount_to_precision = MagicMock(side_effect=Exception("markets not loaded"))
+        mock_ccxt.set_sandbox_mode = MagicMock()
+        MockBinance.return_value = mock_ccxt
+
+        exch = BinanceExchange(api_key="test", api_secret="test", testnet=True)
+        order = Order(
+            id="ord-fallback", symbol="BTC/USDT", side="BUY", type="MARKET",
+            quantity=0.012345, price=None, status="PENDING", exchange_order_id=None,
+        )
+        result = await exch.place_order(order)
+
+        # Should not raise; order should have been placed with original quantity
+        assert result.exchange_order_id == "ex-fallback-001"
+        create_kwargs = mock_ccxt.create_order.call_args
+        actual_amount = create_kwargs.kwargs.get("amount") or create_kwargs.args[3]
+        assert actual_amount == pytest.approx(0.012345)

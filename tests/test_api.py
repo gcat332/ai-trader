@@ -7,6 +7,75 @@ from db.repository import Repository
 from api.main import create_app
 
 
+# ── Fix 1: CORS configurable via CORS_ORIGINS env ───────────────────────────
+
+@pytest.mark.asyncio
+async def test_app_builds_and_health_route_responds():
+    """create_app still works and a basic route responds (Fix 1 regression guard)."""
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/strategies")
+    assert resp.status_code == 200
+
+
+# ── Fix 6: /api/positions returns live open positions ────────────────────────
+
+from unittest.mock import AsyncMock, MagicMock
+
+
+@pytest.mark.asyncio
+async def test_positions_returns_live_positions_when_exchange_wired():
+    """When exchange is provided, /api/positions returns live positions from get_positions()."""
+    from core.models import Position
+
+    fake_position = Position(
+        symbol="BTC/USDT",
+        side="LONG",
+        entry_price=65000.0,
+        quantity=0.01,
+        unrealized_pnl=150.0,
+        take_profit=None,
+        stop_loss=None,
+        mode="FUTURES",
+    )
+
+    fake_exchange = MagicMock()
+    fake_exchange.get_positions = AsyncMock(return_value=[fake_position])
+
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo, exchange=fake_exchange)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/positions")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["symbol"] == "BTC/USDT"
+    assert data[0]["side"] == "LONG"
+    assert data[0]["entry_price"] == pytest.approx(65000.0)
+    assert data[0]["quantity"] == pytest.approx(0.01)
+    assert data[0]["unrealized_pnl"] == pytest.approx(150.0)
+    assert data[0]["mode"] == "FUTURES"
+
+
+@pytest.mark.asyncio
+async def test_positions_falls_back_to_trade_history_without_exchange():
+    """When no exchange is passed, /api/positions falls back to trade history (existing behaviour)."""
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo)  # no exchange arg
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/positions")
+    assert resp.status_code == 200
+    assert resp.json() == []  # empty trade history
+
+
 @pytest.fixture
 async def client():
     async with aiosqlite.connect(":memory:") as conn:

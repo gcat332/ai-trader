@@ -1,6 +1,9 @@
 # notifier/telegram.py
+import logging
 from core.models import Order, Signal
 from notifier.engine_controller import EngineController
+
+logger = logging.getLogger("notifier.telegram")
 
 
 def format_signal_alert(signal: Signal) -> str:
@@ -90,6 +93,7 @@ class TelegramNotifier:
 
     async def send(self, text: str) -> None:
         if self._app is None:
+            logger.warning("TelegramNotifier.send() called but bot not started — message dropped")
             return
         await self._app.bot.send_message(chat_id=self._chat_id, text=text)
 

@@ -1,12 +1,12 @@
 # tests/test_backtest_reporter.py
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from core.models import TradeRecord
 from backtest.reporter import BacktestReporter
 
 
 def _trade(pnl: float, entry_price: float = 60000.0, qty: float = 0.1) -> TradeRecord:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return TradeRecord(
         symbol="BTC/USDT", side="SELL",
         entry_price=entry_price,
