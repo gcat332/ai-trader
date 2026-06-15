@@ -104,6 +104,19 @@ def test_engine_accepts_ab_tester_param():
 
 
 @pytest.mark.asyncio
+async def test_engine_logs_regime_on_decision(repo):
+    exchange = PaperExchange(initial_balance={"USDT": 10000.0})
+    engine = Engine(exchange=exchange, strategy=BuyWithSlStrategy(), symbol="BTC/USDT",
+                    timeframe="1h", risk_manager=RiskManager(), repo=repo)
+    # 60 trending candles so the classifier returns TRENDING
+    candles = [[1700000000000 + i*3600000, 100.0+i*2, 100.0+i*2+1, 100.0+i*2-1, 100.0+i*2, 100.0]
+               for i in range(60)]
+    await engine.process_candles(candles)
+    decisions = await repo.get_decisions(symbol="BTC/USDT")
+    assert decisions[0]["regime"] in ("TRENDING", "TRANSITIONAL", "SIDEWAYS")
+
+
+@pytest.mark.asyncio
 async def test_engine_record_trade_outcome(repo):
     from core.models import TradeRecord
     exchange = PaperExchange(initial_balance={"USDT": 10000.0})
