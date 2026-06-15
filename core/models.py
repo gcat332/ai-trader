@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
@@ -66,6 +66,7 @@ class DecisionRecord:
     final_decision: Literal["PLACED", "REJECTED", "HOLD"]
     rejection_reason: str | None
     entry_price: float
+    regime: str = "TRANSITIONAL"
 
 
 @dataclass
@@ -76,3 +77,23 @@ class SignalOutcome:
     realized_pnl: float
     hold_duration_hours: float
     exit_reason: Literal["TP", "SL", "MANUAL"]
+
+
+@dataclass
+class StrategyProfile:
+    strategy_id: str
+    regime: str
+    win_rate: float
+    avg_pnl: float
+    sample_count: int
+
+
+@dataclass
+class StrategySwitch:
+    id: str
+    timestamp: datetime
+    regime: str
+    from_strategy: str
+    to_strategy: str
+    decision: Literal["SWAP", "RETRAIN", "EXPLORE", "HOLD_COURSE"]
+    reason: str
