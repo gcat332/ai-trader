@@ -79,7 +79,8 @@ async def init_db(conn: aiosqlite.Connection) -> None:
             narrative   TEXT NOT NULL,
             final_decision TEXT NOT NULL,
             rejection_reason TEXT,
-            entry_price REAL NOT NULL
+            entry_price REAL NOT NULL,
+            regime      TEXT NOT NULL DEFAULT 'TRANSITIONAL'
         )
     """)
     await conn.execute("""
@@ -106,4 +107,25 @@ async def init_db(conn: aiosqlite.Connection) -> None:
             notes                TEXT
         )
     """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS strategy_switches (
+            id            TEXT PRIMARY KEY,
+            timestamp     TEXT NOT NULL,
+            regime        TEXT NOT NULL,
+            from_strategy TEXT NOT NULL,
+            to_strategy   TEXT NOT NULL,
+            decision      TEXT NOT NULL,
+            reason        TEXT NOT NULL
+        )
+    """)
     await conn.commit()
+    # Migration guard: add regime column to decisions for existing DBs.
+    # CREATE TABLE IF NOT EXISTS already includes the column for fresh DBs;
+    # for existing DBs SQLite raises OperationalError if the column exists.
+    try:
+        await conn.execute(
+            "ALTER TABLE decisions ADD COLUMN regime TEXT NOT NULL DEFAULT 'TRANSITIONAL'"
+        )
+        await conn.commit()
+    except Exception:
+        pass  # column already exists — expected on existing DBs
