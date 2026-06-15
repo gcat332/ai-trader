@@ -195,6 +195,17 @@ def test_format_retrain_complete():
 
 # ── Fix 2: send() warns when bot not started ─────────────────────────────────
 
+def test_format_strategy_switch():
+    from notifier.telegram import format_strategy_switch
+    from core.models import StrategySwitch
+    from datetime import datetime, timezone
+    sw = StrategySwitch(id="sw1", timestamp=datetime.now(timezone.utc), regime="SIDEWAYS",
+                        from_strategy="rsi_macd", to_strategy="bollinger_reversion",
+                        decision="SWAP", reason="rsi_macd weak in SIDEWAYS (36%) → bollinger (62%)")
+    text = format_strategy_switch(sw)
+    assert "SWAP" in text and "SIDEWAYS" in text and "bollinger_reversion" in text
+
+
 @pytest.mark.asyncio
 async def test_send_when_app_none_does_not_raise_and_logs_warning(caplog):
     """send() on an unstarted notifier must not raise and must emit a warning."""

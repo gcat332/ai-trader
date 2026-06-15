@@ -123,6 +123,14 @@ def create_app(repo: Repository, exchange=None) -> FastAPI:
     async def get_ab_tests(limit: int = 20):
         return await repo.get_ab_test_history(limit=limit)
 
+    @app.get("/api/strategy-profiles")
+    async def get_strategy_profiles():
+        return await repo.get_strategy_profiles()
+
+    @app.get("/api/strategy-switches")
+    async def get_strategy_switches(limit: int = 50):
+        return await repo.get_strategy_switches(limit=limit)
+
     @app.websocket("/ws/feed")
     async def websocket_feed(websocket: WebSocket):
         await websocket.accept()
