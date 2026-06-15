@@ -15,8 +15,12 @@ class RsiMacdStrategy(BaseStrategy):
         self,
         ml_model: MLModel,
         rsi_period: int = 14,
-        rsi_oversold: float = 30.0,
-        rsi_overbought: float = 70.0,
+        # 30/70 was effectively inert on real data — RSI hit <30 only ~1% of
+        # candles and rarely while MACD was favourable, so the strategy never
+        # traded. 35/65 (a standard mean-reversion band) actually fires. Tunable
+        # via RSI_OVERSOLD / RSI_OVERBOUGHT (see main._build_strategy).
+        rsi_oversold: float = 35.0,
+        rsi_overbought: float = 65.0,
         confidence_threshold: float = 0.6,
         tp_pct: float = 0.03,
         sl_pct: float = 0.02,
@@ -69,14 +73,13 @@ class RsiMacdStrategy(BaseStrategy):
         macd_val = float(macd_line.iloc[-1])
         signal_val = float(signal_line.iloc[-1])
 
-        macd_crossed_above = (
-            float(macd_line.iloc[-2]) < float(signal_line.iloc[-2])
-            and macd_val >= signal_val
-        )
-        macd_crossed_below = (
-            float(macd_line.iloc[-2]) > float(signal_line.iloc[-2])
-            and macd_val <= signal_val
-        )
+        # Entry uses MACD *side* (line vs signal), not a same-bar crossover.
+        # Requiring an RSI extreme AND a fresh crossover on the exact same candle
+        # almost never co-occurs on real data (the crossover is a 1-bar event), so
+        # the strict version was effectively inert. "Oversold + MACD already on the
+        # bullish side" is the standard mean-reversion entry and actually triggers.
+        macd_bullish = macd_val >= signal_val
+        macd_bearish = macd_val <= signal_val
 
         features = pd.Series({
             "rsi": current_rsi,
@@ -93,7 +96,7 @@ class RsiMacdStrategy(BaseStrategy):
                 adx=adx_val, vol_ratio=vol_ratio, confidence=confidence,
             )
 
-        if current_rsi < self._rsi_oversold and macd_crossed_above:
+        if current_rsi < self._rsi_oversold and macd_bullish:
             narrative = build_narrative(
                 rsi=current_rsi,
                 macd_line=macd_val,
@@ -115,7 +118,7 @@ class RsiMacdStrategy(BaseStrategy):
                 narrative=narrative,
             )
 
-        if current_rsi > self._rsi_overbought and macd_crossed_below:
+        if current_rsi > self._rsi_overbought and macd_bearish:
             narrative = build_narrative(
                 rsi=current_rsi,
                 macd_line=macd_val,

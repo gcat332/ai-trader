@@ -42,7 +42,11 @@ def _cooldown_elapsed(last_retrain_iso: str, days: int) -> bool:
 def _build_strategy() -> BaseStrategy:
     mode = os.getenv("STRATEGY_MODE", "rule_based")
     ml_model = DummyModel(confidence=float(os.getenv("ML_CONFIDENCE", "0.75")))
-    gatekeeper = RsiMacdStrategy(ml_model=ml_model)
+    gatekeeper = RsiMacdStrategy(
+        ml_model=ml_model,
+        rsi_oversold=float(os.getenv("RSI_OVERSOLD", "35")),
+        rsi_overbought=float(os.getenv("RSI_OVERBOUGHT", "65")),
+    )
 
     match mode:
         case "rule_based":
@@ -113,6 +117,11 @@ async def run():
 
     strategy = _build_strategy()
 
+    # Symbol/timeframe and loop cadence are env-driven so a go-live rehearsal can
+    # run a fast 1m loop without touching prod defaults (1h candle, hourly poll).
+    symbol = os.getenv("TRADING_SYMBOL", "BTC/USDT")
+    timeframe = os.getenv("TRADING_TIMEFRAME", "1h")
+
     drift_detector = DriftDetector(
         win_rate_threshold=float(os.getenv("DRIFT_WIN_RATE_THRESHOLD", "0.40")),
         calibration_threshold=float(os.getenv("DRIFT_CALIBRATION_THRESHOLD", "0.20")),
@@ -138,8 +147,8 @@ async def run():
         engine = Engine(
             exchange=exchange,
             strategy=strategy,
-            symbol="BTC/USDT",
-            timeframe="1h",
+            symbol=symbol,
+            timeframe=timeframe,
             risk_manager=risk_manager,
             repo=repo,
             state_path=os.getenv("ENGINE_STATE_PATH", "db/engine_state.json"),
@@ -230,7 +239,7 @@ async def run():
                         last_reset_date = today
 
                     if engine.is_running:
-                        candles = await data_source.fetch_ohlcv("BTC/USDT", "1h", limit=100)
+                        candles = await data_source.fetch_ohlcv(symbol, timeframe, limit=100)
                         # Mark-to-market equity = free USDT + value of open positions at the
                         # latest close. We use equity (not free USDT alone) because an open
                         # position's unrealized loss must count toward the daily drawdown —
@@ -367,7 +376,7 @@ async def run():
                 elif loop_errored:
                     delay = int(os.getenv("ERROR_BACKOFF_SECONDS", "30"))
                 else:
-                    delay = 3600
+                    delay = int(os.getenv("LOOP_INTERVAL_SECONDS", "3600"))
                 await asyncio.sleep(delay)
 
         # Bind localhost by default so the trading-control API is not reachable from
