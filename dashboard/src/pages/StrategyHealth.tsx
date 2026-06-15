@@ -1,11 +1,17 @@
 // dashboard/src/pages/StrategyHealth.tsx
-import { useStrategyHealth, useABTests, useDecisionLog } from "../api/client";
+import { useStrategyHealth, useABTests, useDecisionLog, useStrategyProfiles, useStrategySwitches } from "../api/client";
 import { StatCard } from "../components/StatCard";
 
 export default function StrategyHealth() {
   const { data: health } = useStrategyHealth();
   const { data: abTests = [] } = useABTests();
   const { data: decisions = [] } = useDecisionLog();
+  const { data: profiles = [] } = useStrategyProfiles();
+  const { data: switches = [] } = useStrategySwitches();
+  const regimes = ["TRENDING", "TRANSITIONAL", "SIDEWAYS"];
+  const strategies = Array.from(new Set(profiles.map((p) => p.strategy_id)));
+  const cell = (s: string, r: string) =>
+    profiles.find((p) => p.strategy_id === s && p.regime === r);
 
   const winRateValue = health?.win_rate_30 ?? 0;
   const calibrationValue = health?.confidence_calibration ?? 0;
@@ -82,6 +88,54 @@ export default function StrategyHealth() {
             </tbody>
           </table>
         )}
+      </div>
+
+      {/* Win Rate by Regime Matrix */}
+      <div className="bg-white rounded-xl p-5 border border-gray-200 shadow-sm">
+        <h2 className="text-base font-semibold text-gray-900 mb-4">Win Rate by Regime</h2>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-xs text-gray-400 uppercase">
+              <th className="text-left pb-2">Strategy</th>
+              {regimes.map((r) => <th key={r} className="text-right pb-2">{r}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {strategies.map((s) => (
+              <tr key={s} className="border-t border-gray-100">
+                <td className="py-2 font-medium text-gray-900">{s}</td>
+                {regimes.map((r) => {
+                  const c = cell(s, r);
+                  const wr = c ? `${(c.win_rate * 100).toFixed(0)}% (n=${c.sample_count})` : "—";
+                  const good = c && c.win_rate >= 0.5;
+                  return <td key={r} className={`py-2 text-right ${c ? (good ? "text-green-600" : "text-red-500") : "text-gray-300"}`}>{wr}</td>;
+                })}
+              </tr>
+            ))}
+            {strategies.length === 0 && (
+              <tr>
+                <td colSpan={4} className="py-6 text-center text-gray-400 text-sm">No strategy profiles yet</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Strategy Switch History */}
+      <div className="bg-white rounded-xl p-5 border border-gray-200 shadow-sm">
+        <h2 className="text-base font-semibold text-gray-900 mb-4">Strategy Switch History</h2>
+        <div className="space-y-2 max-h-80 overflow-y-auto">
+          {switches.map((sw) => (
+            <div key={sw.id} className="border border-gray-100 rounded p-3">
+              <div className="flex justify-between text-sm">
+                <span className="font-medium text-gray-900">{sw.decision} · {sw.regime}</span>
+                <span className="text-gray-400 text-xs">{new Date(sw.timestamp).toLocaleString()}</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">{sw.from_strategy} → {sw.to_strategy}: {sw.reason}</p>
+            </div>
+          ))}
+          {switches.length === 0 && <p className="text-gray-400 text-center py-4">No strategy switches yet</p>}
+        </div>
       </div>
 
       {/* Recent Decision Log */}

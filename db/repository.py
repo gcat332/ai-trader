@@ -135,11 +135,12 @@ class Repository:
         await self._conn.execute(
             """INSERT INTO decisions
                (id, timestamp, symbol, strategy_id, signal_side, confidence,
-                narrative, final_decision, rejection_reason, entry_price)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                narrative, final_decision, rejection_reason, entry_price, regime)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (rec.id, rec.timestamp.isoformat(), rec.symbol, rec.strategy_id,
              rec.signal_side, rec.confidence, rec.narrative,
-             rec.final_decision, rec.rejection_reason, rec.entry_price),
+             rec.final_decision, rec.rejection_reason, rec.entry_price,
+             getattr(rec, "regime", "TRANSITIONAL")),
         )
         await self._conn.commit()
 
@@ -224,3 +225,44 @@ class Repository:
         wins = sum(1 for r in rows if r[0] == "WIN")
         avg_pnl = sum(r[1] for r in rows) / total
         return {"total": total, "win_rate": wins / total, "avg_pnl": avg_pnl}
+
+    async def get_strategy_profiles(self, limit_per_group: int = 200) -> list[dict]:
+        """Per-(strategy_id, regime) win_rate / avg_pnl / sample_count over PLACED outcomes."""
+        cursor = await self._conn.execute(
+            """SELECT d.strategy_id AS strategy_id, d.regime AS regime,
+                      AVG(CASE WHEN so.actual_outcome='WIN' THEN 1.0 ELSE 0.0 END) AS win_rate,
+                      AVG(so.realized_pnl) AS avg_pnl,
+                      COUNT(*) AS sample_count
+               FROM signal_outcomes so
+               JOIN decisions d ON so.decision_id = d.id
+               WHERE d.final_decision = 'PLACED'
+               GROUP BY d.strategy_id, d.regime"""
+        )
+        rows = await cursor.fetchall()
+        cols = [c[0] for c in cursor.description]
+        return [dict(zip(cols, r)) for r in rows]
+
+    async def insert_strategy_switch(self, sw) -> None:
+        await self._conn.execute(
+            """INSERT INTO strategy_switches
+               (id, timestamp, regime, from_strategy, to_strategy, decision, reason)
+               VALUES (?,?,?,?,?,?,?)""",
+            (sw.id, sw.timestamp.isoformat(), sw.regime, sw.from_strategy,
+             sw.to_strategy, sw.decision, sw.reason),
+        )
+        await self._conn.commit()
+
+    async def get_strategy_switches(self, limit: int = 50) -> list[dict]:
+        cursor = await self._conn.execute(
+            "SELECT * FROM strategy_switches ORDER BY timestamp DESC LIMIT ?", (limit,)
+        )
+        rows = await cursor.fetchall()
+        cols = [c[0] for c in cursor.description]
+        return [dict(zip(cols, r)) for r in rows]
+
+    async def get_last_switch_time(self) -> str | None:
+        cursor = await self._conn.execute(
+            "SELECT timestamp FROM strategy_switches ORDER BY timestamp DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None

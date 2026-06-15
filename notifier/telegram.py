@@ -69,6 +69,12 @@ def format_retrain_complete(holdout_accuracy: float, model_id: str) -> str:
     )
 
 
+def format_strategy_switch(sw) -> str:
+    emoji = {"SWAP": "🔀", "RETRAIN": "🔧", "EXPLORE": "🧭", "HOLD_COURSE": "⏸"}.get(sw.decision, "ℹ️")
+    return (f"{emoji} Strategy {sw.decision} [{sw.regime}]\n"
+            f"{sw.from_strategy} → {sw.to_strategy}\n{sw.reason}")
+
+
 def format_ab_result(result: "ABTestResult") -> str:
     if result.outcome == "CHALLENGER_APPLIED":
         emoji = "✅"
@@ -138,6 +144,10 @@ class TelegramNotifier:
     async def send_ab_result(self, result) -> None:
         from notifier.telegram import format_ab_result
         await self.send(format_ab_result(result))
+
+    async def send_strategy_switch(self, sw) -> None:
+        from notifier.telegram import format_strategy_switch
+        await self.send(format_strategy_switch(sw))
 
     # ── Command handlers ──────────────────────────────────────────────────
 

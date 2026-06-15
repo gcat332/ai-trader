@@ -66,7 +66,35 @@ def test_position_pnl_field():
     assert pos.mode == "SPOT"
 
 
-from core.models import DecisionRecord, SignalOutcome
+from core.models import DecisionRecord, SignalOutcome, StrategyProfile, StrategySwitch
+
+
+def test_decision_record_has_regime():
+    from datetime import datetime
+    from core.models import DecisionRecord
+    rec = DecisionRecord(
+        id="d1", timestamp=datetime(2026, 1, 1), symbol="BTC/USDT",
+        strategy_id="rsi_macd", signal_side="BUY", confidence=0.8,
+        narrative="x", final_decision="PLACED", rejection_reason=None,
+        entry_price=65000.0, regime="TRENDING",
+    )
+    assert rec.regime == "TRENDING"
+
+
+def test_strategy_profile_fields():
+    p = StrategyProfile(strategy_id="rsi_macd", regime="SIDEWAYS",
+                        win_rate=0.36, avg_pnl=-5.0, sample_count=42)
+    assert p.regime == "SIDEWAYS"
+    assert p.win_rate == 0.36
+
+
+def test_strategy_switch_fields():
+    from datetime import datetime
+    sw = StrategySwitch(id="sw1", timestamp=datetime(2026, 1, 1), regime="SIDEWAYS",
+                        from_strategy="rsi_macd", to_strategy="bollinger_reversion",
+                        decision="SWAP", reason="rsi_macd weak in SIDEWAYS (36%) → bollinger (62%)")
+    assert sw.decision == "SWAP"
+    assert sw.to_strategy == "bollinger_reversion"
 
 
 def test_signal_has_narrative_field():
