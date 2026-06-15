@@ -41,11 +41,11 @@ These need new subsystems, schema/data-flow changes, or live verification — de
 into the green codebase. Each is isolated and documented.
 
 ### Live trading completeness (do before unattended mainnet)
-- ⬜ **Live outcome-recording gap (Important).** `engine.record_trade_outcome` is wired in the
-  BacktestRunner but NOT in `main.py`'s live loop — live positions close via OCO on the exchange, not
-  via `tick()`. So in live mode `signal_outcomes` stays empty → DriftDetector + A/B have no live data
-  (they work in backtest only). Needs an exchange order-status / OCO-fill polling step in the live loop
-  that detects closed positions and calls `record_trade_outcome`. Found: Phase 8/9 reviews.
+- ✅ **Live outcome-recording gap (Important).** DONE in Phase 11: `LiveOutcomeTracker` diffs open
+  positions between live ticks and synthesizes closed-trade records → `record_trade_outcome` fires
+  live, so `signal_outcomes`/drift/profiles populate in live mode. Limitation: PnL is marked at the
+  candle close (not the real OCO fill) and exit_reason is "MANUAL" — directionally correct for
+  WIN/LOSS profiling. Found: Phase 8/9; fixed: Phase 11.
 - ⬜ **`get_positions` spot/futures mismatch (Note).** `BinanceExchange.get_positions` reads futures
   fields + sets `mode="FUTURES"` on a spot client — dormant on spot (spot holdings tracked via balance).
   Revisit when futures is enabled. Found: Phase 7 review.
