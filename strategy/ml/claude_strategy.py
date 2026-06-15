@@ -8,6 +8,19 @@ from strategy.ml.skill_loader import load_trading_skills
 from core.models import Signal
 
 _MIN_TP_SL_RATIO = 1.5
+
+_DECISION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "decision": {"type": "string", "enum": ["BUY", "SELL", "HOLD"]},
+        "confidence": {"type": "number"},
+        "narrative": {"type": "string"},
+        "take_profit": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+        "stop_loss": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+    },
+    "required": ["decision", "confidence", "narrative", "take_profit", "stop_loss"],
+    "additionalProperties": False,
+}
 _DEFAULT_SL_PCT = 0.02   # 2% default stop loss
 _DEFAULT_TP_PCT = 0.035  # 3.5% default take profit (1.75× SL)
 
@@ -44,6 +57,9 @@ class ClaudeStrategy(BaseStrategy):
                 api_key=os.environ["ANTHROPIC_API_KEY"], timeout=api_timeout
             )
         self._model = model or os.getenv("CLAUDE_STRATEGY_MODEL", "claude-haiku-4-5-20251001")
+        # validate() is the last gate before a real order and runs infrequently (only on a
+        # non-HOLD gatekeeper signal) → default to a stronger model than per-candle on_candle.
+        self._validate_model = os.getenv("CLAUDE_VALIDATE_MODEL", "claude-opus-4-8")
         self._confidence_threshold = confidence_threshold
         self._api_timeout = api_timeout
 
@@ -51,7 +67,9 @@ class ClaudeStrategy(BaseStrategy):
         """Primary decision maker — Claude evaluates the full market snapshot."""
         entry_price = float(ohlcv["close"].iloc[-1])
         user_prompt = self._build_snapshot_prompt(symbol, ohlcv, context="full")
-        return self._call_and_parse(symbol, entry_price, user_prompt, strategy_id="claude_ai")
+        return self._call_and_parse(
+            symbol, entry_price, user_prompt, strategy_id="claude_ai", model=self._model
+        )
 
     def validate(self, signal: Signal, ohlcv: pd.DataFrame) -> Signal:
         """Validator for HybridStrategy — Claude confirms or rejects a pre-existing signal."""
@@ -64,7 +82,8 @@ class ClaudeStrategy(BaseStrategy):
             + "\n\nConfirm or reject this signal. Output JSON only."
         )
         return self._call_and_parse(
-            signal.symbol, signal.entry_price, user_prompt, strategy_id="hybrid"
+            signal.symbol, signal.entry_price, user_prompt,
+            strategy_id="hybrid", model=self._validate_model,
         )
 
     def _build_snapshot_prompt(self, symbol: str, ohlcv: pd.DataFrame, context: str) -> str:
@@ -123,14 +142,16 @@ class ClaudeStrategy(BaseStrategy):
         }, indent=2)
 
     def _call_and_parse(
-        self, symbol: str, entry_price: float, user_prompt: str, strategy_id: str
+        self, symbol: str, entry_price: float, user_prompt: str, strategy_id: str,
+        model: str | None = None,
     ) -> Signal:
         try:
             response = self._client.messages.create(
-                model=self._model,
+                model=model or self._model,
                 max_tokens=512,
                 system=_get_system_prompt(),
                 messages=[{"role": "user", "content": user_prompt}],
+                output_config={"format": {"type": "json_schema", "schema": _DECISION_SCHEMA}},
             )
             raw = response.content[0].text.strip()
             data = json.loads(raw)

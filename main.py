@@ -172,15 +172,23 @@ async def run():
 
             # Multi-mode components (only used when strategy is a MetaStrategy)
             outcome_tracker = LiveOutcomeTracker()
-            arbiter = (
-                StrategyArbiter(
+            arbiter = None
+            if isinstance(strategy, MetaStrategy):
+                rule_arbiter = StrategyArbiter(
                     strategies=strategy.strategy_ids,
                     swap_margin=float(os.getenv("SWAP_MARGIN", "0.10")),
                     min_regime_samples=int(os.getenv("MIN_REGIME_SAMPLES", "20")),
                     epsilon=float(os.getenv("STRATEGY_EPSILON", "0.10")),
                 )
-                if isinstance(strategy, MetaStrategy) else None
-            )
+                if os.getenv("ARBITER_MODE", "rule") == "claude":
+                    from core.claude_arbiter import ClaudeStrategyArbiter
+                    arbiter = ClaudeStrategyArbiter(
+                        strategies=strategy.strategy_ids,
+                        fallback=rule_arbiter, repo=repo,
+                        model=os.getenv("CLAUDE_ARBITER_MODEL"),
+                    )
+                else:
+                    arbiter = rule_arbiter
 
             while True:
                 # Whole loop body is wrapped so any transient failure (balance fetch,
@@ -244,7 +252,12 @@ async def run():
                                         last_switch,
                                         days=int(os.getenv("SWAP_COOLDOWN_DAYS", "1")),
                                     ):
-                                        decision = arbiter.decide(current_regime, strategy.active, profiles)
+                                        from core.claude_arbiter import ClaudeStrategyArbiter
+                                        decision = (
+                                            await arbiter.decide(current_regime, strategy.active, profiles)
+                                            if isinstance(arbiter, ClaudeStrategyArbiter)
+                                            else arbiter.decide(current_regime, strategy.active, profiles)
+                                        )
                                         await repo.insert_strategy_switch(decision)
                                         if notifier:
                                             await notifier.send_strategy_switch(decision)

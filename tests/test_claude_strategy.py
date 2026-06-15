@@ -47,6 +47,29 @@ def test_buy_signal_parsed_correctly():
     assert signal.narrative != ""
 
 
+def test_validate_uses_validate_model():
+    # on_candle uses the cheap per-candle model; validate (last gate before a real order)
+    # uses the stronger validate model.
+    from core.models import Signal
+    from datetime import datetime, timezone
+    mock_client = _mock_api_response("BUY", 0.82)
+    strategy = ClaudeStrategy(
+        client=mock_client, model="haiku-test",
+    )
+    strategy._validate_model = "opus-test"
+    strategy.on_candle("BTC/USDT", _make_ohlcv())
+    assert mock_client.messages.create.call_args.kwargs["model"] == "haiku-test"
+
+    sig = Signal(
+        symbol="BTC/USDT", side="BUY", entry_price=65000.0,
+        take_profit=66000.0, stop_loss=64000.0, trailing_sl=False,
+        confidence=0.7, strategy_id="rsi_macd",
+        timestamp=datetime.now(timezone.utc), narrative="gatekeeper",
+    )
+    strategy.validate(sig, _make_ohlcv())
+    assert mock_client.messages.create.call_args.kwargs["model"] == "opus-test"
+
+
 def test_sell_signal_parsed_correctly():
     mock_client = _mock_api_response("SELL", 0.75)
     strategy = ClaudeStrategy(client=mock_client)
@@ -148,3 +171,15 @@ def test_validate_rejects_when_claude_disagrees():
     )
     result = strategy.validate(original, _make_ohlcv())
     assert result.side == "HOLD"
+
+
+def test_create_called_with_output_config():
+    """messages.create must be called with output_config containing json_schema format."""
+    mock_client = _mock_api_response("BUY", 0.82)
+    strategy = ClaudeStrategy(client=mock_client)
+    strategy.on_candle("BTC/USDT", _make_ohlcv())
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert "output_config" in call_kwargs, "output_config kwarg not passed to messages.create"
+    fmt = call_kwargs["output_config"]["format"]
+    assert fmt["type"] == "json_schema", f"Expected json_schema, got {fmt['type']}"
+    assert "decision" in fmt["schema"]["properties"], "Schema missing 'decision' property"
