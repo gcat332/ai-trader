@@ -15,7 +15,10 @@ COPY notifier ./notifier
 COPY api ./api
 COPY db ./db
 COPY ml ./ml
-COPY models ./models
+# No `COPY models` — models/*.pkl are gitignored (runtime artifacts), so they're
+# absent in CI's git checkout and the COPY fails the remote build. The retrainer
+# creates models/ itself (ModelRetrainer.retrain mkdirs it); rule_based/multi use
+# DummyModel and need no .pkl on disk.
 COPY main.py run_api.py ./
 
 RUN pip install --no-cache-dir .
