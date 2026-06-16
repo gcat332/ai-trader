@@ -28,10 +28,12 @@ def format_daily_summary(
     rejected: int,
     hold: int,
     rejection_breakdown: dict[str, int],
+    day: str | None = None,
 ) -> str:
     breakdown = ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in rejection_breakdown.items())
+    title = f"📊 Daily Decision Summary — {day}" if day else "📊 Daily Decision Summary"
     lines = [
-        f"📊 Daily Decision Summary",
+        title,
         f"Total evaluated: {total_evaluated}",
         f"✅ Placed: {placed}  |  ⛔ Rejected: {rejected}  |  ⏸ Hold: {hold}",
     ]
@@ -113,24 +115,27 @@ class TelegramNotifier:
     async def on_daily_limit_hit(self) -> None:
         await self.send("⚠️ Daily loss limit reached — bot paused")
 
-    async def send_daily_summary(self, repo) -> None:
-        """Pull today's decisions from DB and send summary to Telegram."""
-        decisions = await repo.get_decisions(limit=200)
+    async def send_daily_summary(self, repo, day: str | None = None) -> None:
+        """Pull one day's decisions from DB and send a summary to Telegram.
+        `day` is an ISO date (YYYY-MM-DD); defaults to today. The loop passes the
+        day that just ended at UTC-midnight rollover. limit=500 covers a busy day
+        (incl. fast 1m-loop rehearsals) without truncation."""
+        decisions = await repo.get_decisions(limit=500)
         from datetime import date
-        today = date.today().isoformat()
-        today_decisions = [d for d in decisions if d["timestamp"][:10] == today]
+        day = day or date.today().isoformat()
+        day_decisions = [d for d in decisions if d["timestamp"][:10] == day]
 
-        total = len(today_decisions)
-        placed = sum(1 for d in today_decisions if d["final_decision"] == "PLACED")
-        rejected = sum(1 for d in today_decisions if d["final_decision"] == "REJECTED")
+        total = len(day_decisions)
+        placed = sum(1 for d in day_decisions if d["final_decision"] == "PLACED")
+        rejected = sum(1 for d in day_decisions if d["final_decision"] == "REJECTED")
         hold = total - placed - rejected
 
         breakdown: dict[str, int] = {}
-        for d in today_decisions:
+        for d in day_decisions:
             if d["final_decision"] == "REJECTED" and d["rejection_reason"]:
                 breakdown[d["rejection_reason"]] = breakdown.get(d["rejection_reason"], 0) + 1
 
-        text = format_daily_summary(total, placed, rejected, hold, breakdown)
+        text = format_daily_summary(total, placed, rejected, hold, breakdown, day=day)
         await self.send(text)
 
     async def send_drift_alert(self, event) -> None:
