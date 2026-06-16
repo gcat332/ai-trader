@@ -22,6 +22,10 @@ def format_signal_alert(signal: Signal) -> str:
     return text
 
 
+def _money(v: float) -> str:
+    return f"{'+' if v >= 0 else '-'}${abs(v):,.2f}"
+
+
 def format_daily_summary(
     total_evaluated: int,
     placed: int,
@@ -29,6 +33,12 @@ def format_daily_summary(
     hold: int,
     rejection_breakdown: dict[str, int],
     day: str | None = None,
+    *,
+    day_pnl: float | None = None,
+    total_pnl: float | None = None,
+    wins: int | None = None,
+    trades: int | None = None,
+    balance: float | None = None,
 ) -> str:
     breakdown = ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in rejection_breakdown.items())
     title = f"📊 Daily Decision Summary — {day}" if day else "📊 Daily Decision Summary"
@@ -39,6 +49,14 @@ def format_daily_summary(
     ]
     if breakdown:
         lines.append(f"Rejections: {breakdown}")
+    # Performance block (omitted when no perf data is passed, e.g. legacy callers).
+    if day_pnl is not None:
+        lines.append(f"💰 PnL: {_money(day_pnl)} (day)  |  {_money(total_pnl or 0)} (total)")
+    if trades is not None:
+        win_rate = (wins / trades) if trades else 0.0
+        lines.append(f"🎯 Win rate: {win_rate:.0%} ({wins or 0}/{trades} trades)")
+    if balance is not None:
+        lines.append(f"🏦 Balance: ${balance:,.2f} USDT")
     return "\n".join(lines)
 
 
@@ -115,11 +133,13 @@ class TelegramNotifier:
     async def on_daily_limit_hit(self) -> None:
         await self.send("⚠️ Daily loss limit reached — bot paused")
 
-    async def send_daily_summary(self, repo, day: str | None = None) -> None:
-        """Pull one day's decisions from DB and send a summary to Telegram.
-        `day` is an ISO date (YYYY-MM-DD); defaults to today. The loop passes the
-        day that just ended at UTC-midnight rollover. limit=500 covers a busy day
-        (incl. fast 1m-loop rehearsals) without truncation."""
+    async def send_daily_summary(self, repo, day: str | None = None,
+                                 balance: float | None = None) -> None:
+        """Pull one day's decisions + closed trades from DB and send a summary to
+        Telegram. `day` is an ISO date (YYYY-MM-DD); defaults to today. The loop
+        passes the day that just ended at UTC-midnight rollover, plus the account
+        balance it already fetched. limit=500 covers a busy day (incl. fast
+        1m-loop rehearsals) without truncation."""
         decisions = await repo.get_decisions(limit=500)
         from datetime import date
         day = day or date.today().isoformat()
@@ -135,7 +155,21 @@ class TelegramNotifier:
             if d["final_decision"] == "REJECTED" and d["rejection_reason"]:
                 breakdown[d["rejection_reason"]] = breakdown.get(d["rejection_reason"], 0) + 1
 
-        text = format_daily_summary(total, placed, rejected, hold, breakdown, day=day)
+        # Performance block from closed trades. Same realized_pnl/exit_time fields
+        # the /pnl command uses (live_controller.get_pnl). ponytail: realized PnL +
+        # balance, not mark-to-market equity — equity needs a live price fetch the
+        # notifier has no client for, and a daily digest doesn't need intraday marks.
+        trades = await repo.get_trade_history()
+        day_trades = [t for t in trades if (t.get("exit_time") or "")[:10] == day]
+        day_pnl = sum((t.get("realized_pnl") or 0) for t in day_trades)
+        total_pnl = sum((t.get("realized_pnl") or 0) for t in trades)
+        wins = sum(1 for t in day_trades if (t.get("realized_pnl") or 0) > 0)
+        n = len(day_trades)
+
+        text = format_daily_summary(
+            total, placed, rejected, hold, breakdown, day=day,
+            day_pnl=day_pnl, total_pnl=total_pnl, wins=wins, trades=n, balance=balance,
+        )
         await self.send(text)
 
     async def send_drift_alert(self, event) -> None:

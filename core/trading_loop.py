@@ -82,11 +82,14 @@ async def run_trading_loop(
             # UTC midnight daily reset — resets daily loss limit
             today = date.today()
             if today != last_reset_date:
+                bal = await exchange.get_balance()
                 # Send the digest for the day that just ended (skip on first boot
                 # when there is no prior day). last_reset_date is None only at start.
+                # Reuse the balance we just fetched for the digest's balance line.
                 if last_reset_date is not None and notifier:
-                    await notifier.send_daily_summary(repo, day=last_reset_date.isoformat())
-                bal = await exchange.get_balance()
+                    await notifier.send_daily_summary(
+                        repo, day=last_reset_date.isoformat(), balance=bal.get("USDT", 0.0)
+                    )
                 risk_manager.reset_daily(bal.get("USDT", 0.0))
                 last_reset_date = today
 
