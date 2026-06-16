@@ -68,6 +68,30 @@ def test_mainnet_selects_mainnet_keys(monkeypatch):
     assert settings.binance_api_secret == "mn-secret"
 
 
+def test_validate_paper_mode_needs_no_keys(monkeypatch):
+    monkeypatch.setenv("BINANCE_TESTNET", "true")
+    Settings().validate(paper_mode=True)  # must not raise despite no keys
+
+
+def test_validate_live_without_keys_raises(monkeypatch):
+    monkeypatch.setenv("BINANCE_TESTNET", "false")
+    with pytest.raises(ValueError, match="mainnet"):
+        Settings().validate(paper_mode=False)
+
+
+def test_validate_live_with_keys_ok(monkeypatch):
+    monkeypatch.setenv("BINANCE_TESTNET", "false")
+    monkeypatch.setenv("BINANCE_MAINNET_API_KEY", "mn-key")
+    monkeypatch.setenv("BINANCE_MAINNET_API_SECRET", "mn-secret")
+    Settings().validate(paper_mode=False)  # must not raise
+
+
+def test_validate_claude_mode_requires_anthropic_key(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+        Settings().validate(paper_mode=True, strategy_mode="hybrid")
+
+
 def test_legacy_single_pair_fallback(monkeypatch):
     # Old-style .env with only BINANCE_API_KEY/SECRET still works.
     monkeypatch.delenv("BINANCE_TESTNET_API_KEY", raising=False)

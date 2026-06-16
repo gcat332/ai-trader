@@ -1,6 +1,5 @@
 # api/bus.py
 import asyncio
-from typing import Callable
 
 _subscribers: list[asyncio.Queue] = []
 

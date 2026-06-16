@@ -5,6 +5,7 @@ from strategy.base import BaseStrategy
 from strategy.indicators.rsi import compute_rsi
 from strategy.indicators.macd import compute_macd
 from strategy.indicators.adx import compute_adx
+from strategy.indicators.atr import compute_atr
 from strategy.ml.base_model import MLModel
 from strategy.narrative import build_narrative
 
@@ -15,11 +16,20 @@ class RsiMacdStrategy(BaseStrategy):
         self,
         ml_model: MLModel,
         rsi_period: int = 14,
-        rsi_oversold: float = 30.0,
-        rsi_overbought: float = 70.0,
+        # 30/70 was effectively inert on real data — RSI hit <30 only ~1% of
+        # candles and rarely while MACD was favourable, so the strategy never
+        # traded. 35/65 (a standard mean-reversion band) actually fires. Tunable
+        # via RSI_OVERSOLD / RSI_OVERBOUGHT (see main._build_strategy).
+        rsi_oversold: float = 35.0,
+        rsi_overbought: float = 65.0,
         confidence_threshold: float = 0.6,
-        tp_pct: float = 0.03,
-        sl_pct: float = 0.02,
+        # TP/SL default to ATR-scaled (sl_pct/tp_pct=None) so the same rules adapt
+        # to BTC's volatility regimes. Pass tp_pct/sl_pct to force fixed-percent.
+        tp_pct: float | None = None,
+        sl_pct: float | None = None,
+        atr_period: int = 14,
+        atr_sl_mult: float = 2.0,
+        atr_tp_mult: float = 3.0,
         adx_trend_threshold: float = 20.0,
     ):
         self._model = ml_model
@@ -30,7 +40,21 @@ class RsiMacdStrategy(BaseStrategy):
         self._confidence_threshold = confidence_threshold
         self._tp_pct = tp_pct
         self._sl_pct = sl_pct
+        self._atr_period = atr_period
+        self._atr_sl_mult = atr_sl_mult
+        self._atr_tp_mult = atr_tp_mult
         self._adx_threshold = adx_trend_threshold
+
+    def _sl_tp(self, entry: float, atr: float, side: str) -> tuple[float, float]:
+        """Return (stop_loss, take_profit). Fixed-% when tp_pct/sl_pct set, else ATR-scaled."""
+        if self._sl_pct is not None and self._tp_pct is not None:
+            if side == "BUY":
+                return round(entry * (1 - self._sl_pct), 8), round(entry * (1 + self._tp_pct), 8)
+            return round(entry * (1 + self._sl_pct), 8), round(entry * (1 - self._tp_pct), 8)
+        a = atr if (atr == atr and atr > 0) else entry * 0.01  # NaN-safe (NaN != NaN)
+        if side == "BUY":
+            return round(entry - self._atr_sl_mult * a, 8), round(entry + self._atr_tp_mult * a, 8)
+        return round(entry + self._atr_sl_mult * a, 8), round(entry - self._atr_tp_mult * a, 8)
 
     @property
     def ml_model(self):
@@ -47,6 +71,8 @@ class RsiMacdStrategy(BaseStrategy):
         rsi = compute_rsi(close, period=self._rsi_period)
         macd_line, signal_line, _ = compute_macd(close)
         adx = compute_adx(ohlcv["high"], ohlcv["low"], close)
+        atr = compute_atr(ohlcv["high"], ohlcv["low"], close, self._atr_period)
+        atr_now = float(atr.iloc[-1]) if len(atr) else float("nan")
 
         # Compute volume ratio for narrative
         volume = ohlcv["volume"] if "volume" in ohlcv.columns else None
@@ -69,14 +95,13 @@ class RsiMacdStrategy(BaseStrategy):
         macd_val = float(macd_line.iloc[-1])
         signal_val = float(signal_line.iloc[-1])
 
-        macd_crossed_above = (
-            float(macd_line.iloc[-2]) < float(signal_line.iloc[-2])
-            and macd_val >= signal_val
-        )
-        macd_crossed_below = (
-            float(macd_line.iloc[-2]) > float(signal_line.iloc[-2])
-            and macd_val <= signal_val
-        )
+        # Entry uses MACD *side* (line vs signal), not a same-bar crossover.
+        # Requiring an RSI extreme AND a fresh crossover on the exact same candle
+        # almost never co-occurs on real data (the crossover is a 1-bar event), so
+        # the strict version was effectively inert. "Oversold + MACD already on the
+        # bullish side" is the standard mean-reversion entry and actually triggers.
+        macd_bullish = macd_val >= signal_val
+        macd_bearish = macd_val <= signal_val
 
         features = pd.Series({
             "rsi": current_rsi,
@@ -93,7 +118,7 @@ class RsiMacdStrategy(BaseStrategy):
                 adx=adx_val, vol_ratio=vol_ratio, confidence=confidence,
             )
 
-        if current_rsi < self._rsi_oversold and macd_crossed_above:
+        if current_rsi < self._rsi_oversold and macd_bullish:
             narrative = build_narrative(
                 rsi=current_rsi,
                 macd_line=macd_val,
@@ -105,17 +130,18 @@ class RsiMacdStrategy(BaseStrategy):
                 final_decision="PLACED",
                 rejection_reason=None,
             )
+            stop_loss, take_profit = self._sl_tp(entry_price, atr_now, "BUY")
             return Signal(
                 symbol=symbol, side="BUY",
                 entry_price=entry_price,
-                take_profit=round(entry_price * (1 + self._tp_pct), 8),
-                stop_loss=round(entry_price * (1 - self._sl_pct), 8),
+                take_profit=take_profit,
+                stop_loss=stop_loss,
                 trailing_sl=False, confidence=confidence,
                 strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
                 narrative=narrative,
             )
 
-        if current_rsi > self._rsi_overbought and macd_crossed_below:
+        if current_rsi > self._rsi_overbought and macd_bearish:
             narrative = build_narrative(
                 rsi=current_rsi,
                 macd_line=macd_val,
@@ -127,11 +153,12 @@ class RsiMacdStrategy(BaseStrategy):
                 final_decision="PLACED",
                 rejection_reason=None,
             )
+            stop_loss, take_profit = self._sl_tp(entry_price, atr_now, "SELL")
             return Signal(
                 symbol=symbol, side="SELL",
                 entry_price=entry_price,
-                take_profit=round(entry_price * (1 - self._tp_pct), 8),
-                stop_loss=round(entry_price * (1 + self._sl_pct), 8),
+                take_profit=take_profit,
+                stop_loss=stop_loss,
                 trailing_sl=False, confidence=confidence,
                 strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
                 narrative=narrative,

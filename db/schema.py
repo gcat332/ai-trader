@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS positions (
     mode TEXT NOT NULL,
     entry_time TEXT NOT NULL,
     exit_time TEXT,
-    exit_reason TEXT
+    exit_reason TEXT,
+    strategy_id TEXT
 )
 """
 
@@ -126,6 +127,11 @@ async def init_db(conn: aiosqlite.Connection) -> None:
         await conn.execute(
             "ALTER TABLE decisions ADD COLUMN regime TEXT NOT NULL DEFAULT 'TRANSITIONAL'"
         )
+        await conn.commit()
+    except Exception:
+        pass  # column already exists — expected on existing DBs
+    try:
+        await conn.execute("ALTER TABLE positions ADD COLUMN strategy_id TEXT")
         await conn.commit()
     except Exception:
         pass  # column already exists — expected on existing DBs

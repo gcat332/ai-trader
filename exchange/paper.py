@@ -17,7 +17,8 @@ class PaperExchange(Exchange):
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int) -> list[list]:
         return []  # paper exchange doesn't fetch — engine feeds candles directly
 
-    async def place_order(self, order: Order, current_price: float = 0.0) -> Order:
+    async def place_order(self, order: Order, current_price: float = 0.0,
+                          stop_price: float | None = None) -> Order:
         price = order.price if order.price is not None else current_price
         cost = price * order.quantity
 
@@ -95,6 +96,15 @@ class PaperExchange(Exchange):
             self._positions[symbol].take_profit = take_profit
             self._positions[symbol].stop_loss = stop_loss
 
+    async def protect_position(
+        self, symbol: str, side: str, quantity: float,
+        take_profit: float | None, stop_loss: float | None,
+        current_price: float = 0.0,
+    ) -> Order | None:
+        # Paper/backtest TP/SL is simulated in tick() from the stored levels.
+        self.set_position_tp_sl(symbol, take_profit, stop_loss)
+        return None
+
     async def tick(
         self, symbol: str, high: float, low: float, close: float
     ) -> Order | None:
@@ -160,5 +170,4 @@ class PaperExchange(Exchange):
         return fill
 
     def get_trade_log(self) -> list:
-        from core.models import TradeRecord
         return list(self._trade_log)

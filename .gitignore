@@ -21,6 +21,7 @@ htmlcov/
 
 # Database / logs / artifacts
 db/*.db
+db/engine_state.json
 logs/*.log
 backtest_results/
 models/*.pkl

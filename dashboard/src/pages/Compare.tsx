@@ -1,6 +1,6 @@
 // dashboard/src/pages/Compare.tsx
 import { useState } from "react";
-import { useCompare } from "../api/client";
+import { useAvailableStrategies, useCompare } from "../api/client";
 import { EquityChart } from "../components/EquityChart";
 import { StatCard } from "../components/StatCard";
 
@@ -9,7 +9,8 @@ export default function Compare() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [submitted, setSubmitted] = useState(false);
-  const { data } = useCompare(submitted ? strategy : "", fromDate, toDate);
+  const { data: availableStrategies = ["rsi_macd"] } = useAvailableStrategies();
+  const { data, isFetching } = useCompare(submitted ? strategy : "", fromDate, toDate);
 
   const liveTrades: any[] = data?.live_trades ?? [];
   const backtestRuns: any[] = data?.backtest_runs ?? [];
@@ -17,11 +18,9 @@ export default function Compare() {
   let liveCumulative = 0;
   const equityData = liveTrades.map((t: any, i: number) => {
     liveCumulative += t.realized_pnl;
-    const matchingRun = backtestRuns[0];
     return {
       time: t.exit_time?.slice(0, 10) ?? `t${i}`,
       cumulative_pnl: liveCumulative,
-      backtest_pnl: matchingRun ? (matchingRun.total_pnl / liveTrades.length) * (i + 1) : undefined,
     };
   });
 
@@ -38,7 +37,9 @@ export default function Compare() {
             <label className="text-xs text-gray-500 block mb-1">Strategy</label>
             <select value={strategy} onChange={(e) => setStrategy(e.target.value)}
               className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="rsi_macd">rsi_macd</option>
+              {availableStrategies.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
             </select>
           </div>
           <div>
@@ -52,8 +53,9 @@ export default function Compare() {
               className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
           <button onClick={() => setSubmitted(true)}
-            className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-full text-sm font-semibold transition-colors">
-            Compare
+            disabled={submitted && isFetching}
+            className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-full text-sm font-semibold transition-colors disabled:opacity-50">
+            {submitted && isFetching ? "Loading…" : "Compare"}
           </button>
         </div>
       </div>
@@ -63,14 +65,9 @@ export default function Compare() {
           <div className="bg-white rounded-xl p-5 border border-gray-200 shadow-sm">
             <h2 className="text-base font-semibold text-gray-900 mb-1">Equity Curve</h2>
             <p className="text-xs text-gray-400 mb-3">
-              <span className="text-green-500">—</span> Live &nbsp;
-              <span className="text-indigo-400">- -</span> Backtest
+              <span className="text-green-500">—</span> Live
             </p>
-            <EquityChart data={equityData} showBacktest />
-            {/* TODO: replace synthetic projection with real per-trade backtest equity from /api/compare */}
-            <p className="text-xs text-gray-400 mt-2">
-              Note: the backtest line is a linear projection of total PnL, not a per-trade equity curve.
-            </p>
+            <EquityChart data={equityData} />
           </div>
 
           <div className="grid grid-cols-2 gap-4">

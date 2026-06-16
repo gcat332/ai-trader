@@ -17,7 +17,6 @@ class LiveOutcomeTracker:
 
     def snapshot(self, positions: list[Position]) -> None:
         now = datetime.now(timezone.utc)
-        seen = {p.symbol for p in positions}
         for p in positions:
             if p.symbol not in self._prev:
                 self._prev[p.symbol] = (p.entry_price, p.quantity, now)

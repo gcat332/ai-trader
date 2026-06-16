@@ -2,7 +2,24 @@
 import axios from "axios";
 import { useQuery, useMutation } from "@tanstack/react-query";
 
-const api = axios.create({ baseURL: "/api" });
+// Attach X-API-Key when VITE_API_KEY is configured (required for control
+// endpoints when the backend has API_KEY set). Empty/undefined → header omitted.
+const apiKey = import.meta.env.VITE_API_KEY;
+const api = axios.create({
+  baseURL: "/api",
+  headers: apiKey ? { "X-API-Key": apiKey } : {},
+});
+
+// Turn 401s into a clear error so the UI can surface a fixable message.
+api.interceptors.response.use(
+  (r) => r,
+  (error) => {
+    if (error?.response?.status === 401) {
+      return Promise.reject(new Error("Unauthorized — set VITE_API_KEY to match the server's API_KEY"));
+    }
+    return Promise.reject(error);
+  },
+);
 
 export type Trade = {
   id: number; symbol: string; side: string;
@@ -19,7 +36,7 @@ export type BacktestRun = {
   created_at: string;
 };
 
-export type Strategy = { id: string; status: string };
+export type Strategy = { id: string; status: string; active?: boolean };
 export type Pnl = { total: number; daily: number };
 
 export const useTradeHistory = (params?: { symbol?: string; from_date?: string; to_date?: string }) =>
@@ -33,6 +50,18 @@ export const usePnl = () =>
 
 export const useStrategies = () =>
   useQuery<Strategy[]>({ queryKey: ["strategies"], queryFn: () => api.get("/strategies").then((r) => r.data) });
+
+export const useAvailableStrategies = () =>
+  useQuery<string[]>({
+    queryKey: ["strategies-available"],
+    queryFn: () => api.get("/strategies/available").then((r) => r.data),
+  });
+
+export const useRunBacktest = () =>
+  useMutation({
+    mutationFn: (body: { strategy_id: string; symbol: string; from_date: string; to_date: string }) =>
+      api.post("/backtest/run", body).then((r) => r.data as { run_id: string; candles: number }),
+  });
 
 export const useBacktestHistory = () =>
   useQuery<BacktestRun[]>({ queryKey: ["backtests"], queryFn: () => api.get("/backtest/history").then((r) => r.data) });

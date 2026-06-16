@@ -1,22 +1,20 @@
 // dashboard/src/pages/Backtest.tsx
 import { useState } from "react";
-import { useBacktestHistory, useBacktestRun } from "../api/client";
+import { useAvailableStrategies, useBacktestHistory, useBacktestRun, useRunBacktest } from "../api/client";
 import { StatCard } from "../components/StatCard";
-import axios from "axios";
+import { useToast } from "../components/Toast";
 
 export default function Backtest() {
   const { data: runs = [], refetch } = useBacktestHistory();
+  const { data: availableStrategies = ["rsi_macd"] } = useAvailableStrategies();
+  const runBacktest = useRunBacktest();
+  const toast = useToast();
   const [selectedId, setSelectedId] = useState("");
   const [strategy, setStrategy] = useState("rsi_macd");
   const [symbol, setSymbol] = useState("BTC/USDT");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const { data: detail } = useBacktestRun(selectedId);
-
-  const triggerBacktest = async () => {
-    await axios.post("/api/backtest/run", { strategy_id: strategy, symbol, from_date: fromDate, to_date: toDate });
-    refetch();
-  };
 
   return (
     <div className="space-y-6">
@@ -29,13 +27,17 @@ export default function Backtest() {
             <label className="text-xs text-gray-500 block mb-1">Strategy</label>
             <select value={strategy} onChange={(e) => setStrategy(e.target.value)}
               className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="rsi_macd">rsi_macd</option>
+              {availableStrategies.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
             </select>
           </div>
           <div>
             <label className="text-xs text-gray-500 block mb-1">Symbol</label>
-            <input value={symbol} onChange={(e) => setSymbol(e.target.value)}
-              className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 w-36 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <select value={symbol} onChange={(e) => setSymbol(e.target.value)}
+              className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="BTC/USDT">BTC/USDT</option>
+            </select>
           </div>
           <div>
             <label className="text-xs text-gray-500 block mb-1">From</label>
@@ -47,11 +49,32 @@ export default function Backtest() {
             <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)}
               className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
-          <button onClick={triggerBacktest}
-            className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-full text-sm font-semibold transition-colors">
-            Run
+          <button
+            onClick={() =>
+              runBacktest.mutate(
+                { strategy_id: strategy, symbol, from_date: fromDate, to_date: toDate },
+                {
+                  onSuccess: (data) => {
+                    refetch();
+                    setSelectedId(data.run_id);
+                    if (data.candles === 0) {
+                      toast("No candles in that date range — testnet history is limited, try recent dates", "error");
+                    } else {
+                      toast(`Backtest complete — ${data.candles} candles replayed`, "success");
+                    }
+                  },
+                  onError: (e) => toast(`Backtest failed: ${(e as Error).message}`, "error"),
+                },
+              )
+            }
+            disabled={runBacktest.isPending}
+            className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-full text-sm font-semibold transition-colors disabled:opacity-50">
+            {runBacktest.isPending ? "Running…" : "Run"}
           </button>
         </div>
+        {runBacktest.isError && (
+          <p className="text-red-500 text-xs mt-2">{(runBacktest.error as Error)?.message}</p>
+        )}
       </div>
 
       {detail && (

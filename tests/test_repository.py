@@ -98,3 +98,16 @@ async def test_get_trade_history_filters_by_symbol(repo):
         await repo.insert_trade(t)
     btc_trades = await repo.get_trade_history(symbol="BTC/USDT")
     assert len(btc_trades) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_trade_history_filters_by_strategy_id(repo):
+    now = datetime.now(timezone.utc)
+    for sid in ["bollinger_reversion", "ema_cross", "bollinger_reversion"]:
+        t = TradeRecord(symbol="BTC/USDT", side="SELL", entry_price=100.0, exit_price=103.0,
+                        quantity=1.0, realized_pnl=3.0, entry_time=now, exit_time=now,
+                        exit_reason="TP", strategy_id=sid)
+        await repo.insert_trade(t)
+    boll = await repo.get_trade_history(strategy_id="bollinger_reversion")
+    assert len(boll) == 2
+    assert all(r["strategy_id"] == "bollinger_reversion" for r in boll)
