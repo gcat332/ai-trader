@@ -5,9 +5,6 @@ import ccxt.async_support as ccxt
 from core.models import Order, Position
 from exchange.base import Exchange
 
-# Assets that are a quote currency, not a tradable spot "position".
-_QUOTE_ASSETS = {"USDT", "USDC", "BUSD", "FDUSD", "TUSD", "DAI"}
-
 
 class BinanceExchange(Exchange):
 
@@ -138,21 +135,27 @@ class BinanceExchange(Exchange):
         await self._exchange.cancel_order(order_id, symbol)
 
     async def get_positions(self) -> list[Position]:
-        # Spot has no fetch_positions endpoint — holdings ARE the balance. Each
-        # non-quote asset with a free balance is an open long spot position.
+        # Spot has no fetch_positions endpoint — holdings live as balances. But NOT
+        # every balance is a bot position: a real account (and every Binance testnet
+        # account, which is pre-seeded with hundreds of coins) holds assets the bot
+        # never bought. Report ONLY the symbols the bot itself opened — tracked in
+        # _entry_prices on each BUY fill, and re-registered after a restart by
+        # seed_open_positions(). This keeps max_open_positions and the equity /
+        # daily-loss math honest instead of counting pre-existing holdings.
         raw = await self._exchange.fetch_balance()
         positions = []
-        for asset, info in raw.items():
+        for symbol, entry_price in self._entry_prices.items():
+            asset = symbol.split("/")[0]
+            info = raw.get(asset)
             if not isinstance(info, dict) or "free" not in info:
                 continue
             free = float(info["free"])
-            if asset in _QUOTE_ASSETS or free <= 0:
+            if free <= 0:  # position fully exited — balance gone
                 continue
-            symbol = f"{asset}/USDT"
             positions.append(Position(
                 symbol=symbol,
                 side="LONG",
-                entry_price=self._entry_prices.get(symbol, 0.0),
+                entry_price=entry_price,
                 quantity=free,
                 unrealized_pnl=0.0,
                 take_profit=None,
@@ -160,6 +163,22 @@ class BinanceExchange(Exchange):
                 mode="SPOT",
             ))
         return positions
+
+    async def seed_open_positions(self, symbols: list[str]) -> list[Position]:
+        # Restart recovery: _entry_prices is in-memory and lost on restart, so a
+        # position opened before a crash would vanish from get_positions(). For each
+        # symbol the bot trades, if a non-zero free balance exists, re-register it
+        # with unknown entry (0.0, corrected on the next fill). Pre-existing holdings
+        # in OTHER assets are deliberately ignored — that is the whole point.
+        raw = await self._exchange.fetch_balance()
+        for symbol in symbols:
+            asset = symbol.split("/")[0]
+            info = raw.get(asset)
+            if not isinstance(info, dict) or "free" not in info:
+                continue
+            if float(info["free"]) > 0:
+                self._entry_prices.setdefault(symbol, 0.0)
+        return await self.get_positions()
 
     async def get_balance(self) -> dict[str, float]:
         raw = await self._exchange.fetch_balance()

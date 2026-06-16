@@ -59,6 +59,22 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
         daily = sum(t.get("realized_pnl", 0) or 0 for t in today_trades)
         return {"total": total, "daily": daily}
 
+    @app.get("/api/health")
+    async def health():
+        # Liveness/readiness for an external monitor (uptime check, systemd, etc).
+        # last_decision_at is the freshest proxy for "the trading loop is ticking".
+        out: dict = {"status": "ok"}
+        if controller is not None:
+            st = await controller.get_status()
+            out["engine_running"] = st.get("running")
+            out["active_strategy"] = st.get("strategy_id")
+            out["open_positions"] = len(st.get("open_positions") or [])
+        else:
+            out["engine_running"] = None  # read-only API server, no engine attached
+        recent = await repo.get_decisions(limit=1)
+        out["last_decision_at"] = recent[0]["timestamp"] if recent else None
+        return out
+
     @app.get("/api/strategies")
     async def get_strategies():
         # Report the real engine state, not a hardcoded placeholder. Without a
@@ -84,7 +100,8 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
     async def get_available_strategies():
         # The strategy ids that can be backtested / compared. Mirrors the builders
         # in the backtest/run handler. Static set — the bot is Binance-spot only.
-        return ["rsi_macd", "bollinger_reversion", "ema_cross"]
+        return ["rsi_macd", "bollinger_reversion", "ema_cross",
+                "trend_pullback", "liquidation_reversion"]
 
     @app.post("/api/strategies/{strategy_id}/start", dependencies=[Depends(require_api_key)])
     async def start_strategy(strategy_id: str):
@@ -135,6 +152,8 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
         from strategy.rsi_macd import RsiMacdStrategy
         from strategy.bollinger_reversion import BollingerReversionStrategy
         from strategy.ema_cross import EmaCrossStrategy
+        from strategy.trend_pullback import TrendPullbackStrategy
+        from strategy.liquidation_reversion import LiquidationReversionStrategy
 
         strategy_id = body.get("strategy_id", "rsi_macd")
         symbol = body.get("symbol", "BTC/USDT")
@@ -146,6 +165,8 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
             "rsi_macd": lambda: RsiMacdStrategy(ml_model=DummyModel(0.75)),
             "bollinger_reversion": lambda: BollingerReversionStrategy(ml_model=DummyModel(0.75)),
             "ema_cross": lambda: EmaCrossStrategy(ml_model=DummyModel(0.75)),
+            "trend_pullback": lambda: TrendPullbackStrategy(ml_model=DummyModel(0.75)),
+            "liquidation_reversion": lambda: LiquidationReversionStrategy(ml_model=DummyModel(0.75)),
         }
         if strategy_id not in builders:
             raise HTTPException(status_code=422,

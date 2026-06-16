@@ -1,7 +1,6 @@
 # ml/retrainer.py
 import os
 import pickle
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from ml.base_model import BaseMLModel

@@ -224,17 +224,42 @@ async def test_protect_position_noop_without_stop(exchange):
 # ── B2: spot positions are reconstructed from the balance, not fetch_positions ─
 
 @pytest.mark.asyncio
-async def test_get_positions_reads_spot_balance(exchange):
-    """Non-quote assets with a free balance are reported as open spot LONG positions."""
+async def test_get_positions_ignores_preexisting_balances(exchange):
+    """A balance the bot never opened (here: the pre-seeded 0.01 BTC) must NOT be
+    reported as a position. On Binance testnet the account holds hundreds of seed
+    coins; treating each as an open LONG would max out max_open_positions and
+    corrupt mark-to-market equity. Only bot-opened symbols count."""
+    positions = await exchange.get_positions()
+    assert positions == []
+
+
+@pytest.mark.asyncio
+async def test_get_positions_ignores_account_dust_after_seed(exchange):
+    """Regression for the '442 positions' bug: an account full of unrelated coins
+    must yield only the bot's traded symbol after restart recovery, not every asset."""
+    exchange._exchange.fetch_balance = AsyncMock(return_value={
+        "USDT": {"free": 9500.0},
+        "BTC": {"free": 0.01},      # the bot's symbol
+        "XRP": {"free": 404.0},     # account dust / testnet seed
+        "这是测试币": {"free": 10000.0},  # junk testnet token
+    })
+    await exchange.seed_open_positions(["BTC/USDT"])
     positions = await exchange.get_positions()
     assert len(positions) == 1
-    p = positions[0]
-    assert p.symbol == "BTC/USDT"
-    assert p.side == "LONG"
-    assert p.quantity == pytest.approx(0.01)
-    assert p.mode == "SPOT"
-    # USDT is a quote asset and must NOT appear as a position
-    assert all(pos.symbol != "USDT/USDT" for pos in positions)
+    assert positions[0].symbol == "BTC/USDT"
+    assert positions[0].quantity == pytest.approx(0.01)
+
+
+@pytest.mark.asyncio
+async def test_seed_open_positions_recovers_held_symbol(exchange):
+    """After a restart (empty _entry_prices), seeding the traded symbol re-registers
+    the held balance as an open position with unknown (0.0) entry."""
+    assert await exchange.get_positions() == []  # nothing tracked yet
+    seeded = await exchange.seed_open_positions(["BTC/USDT"])
+    assert len(seeded) == 1
+    assert seeded[0].symbol == "BTC/USDT"
+    assert seeded[0].entry_price == 0.0
+    assert seeded[0].mode == "SPOT"
 
 
 @pytest.mark.asyncio

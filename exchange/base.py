@@ -37,6 +37,16 @@ class Exchange(ABC):
     async def get_positions(self) -> list[Position]:
         """Return all currently open positions."""
 
+    async def seed_open_positions(self, symbols: list[str]) -> list[Position]:
+        """Restart-recovery hook. Spot 'positions' exist only as balances and any
+        in-memory entry tracking is lost on restart. Implementations that infer
+        positions from balances (live spot) re-register the bot's own trading
+        symbols here so get_positions() reports them again after a restart.
+
+        Default: no-op — exchanges that track positions internally (PaperExchange)
+        need nothing. Returns the recovered positions."""
+        return []
+
     @abstractmethod
     async def get_balance(self) -> dict[str, float]:
         """Return available balance per asset, e.g. {"USDT": 1000.0, "BTC": 0.05}."""

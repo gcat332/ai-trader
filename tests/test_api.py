@@ -125,7 +125,41 @@ async def test_get_strategies(client):
 async def test_available_strategies_lists_all_techniques(client):
     resp = await client.get("/api/strategies/available")
     assert resp.status_code == 200
-    assert set(resp.json()) == {"rsi_macd", "bollinger_reversion", "ema_cross"}
+    assert set(resp.json()) == {
+        "rsi_macd", "bollinger_reversion", "ema_cross",
+        "trend_pullback", "liquidation_reversion",
+    }
+
+
+@pytest.mark.asyncio
+async def test_health_without_controller(client):
+    resp = await client.get("/api/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["engine_running"] is None
+    assert data["last_decision_at"] is None  # empty db
+
+
+@pytest.mark.asyncio
+async def test_health_with_controller_reports_engine_state():
+    controller = MagicMock()
+    controller.get_status = AsyncMock(return_value={
+        "running": True,
+        "strategy_id": "bollinger_reversion",
+        "open_positions": [{"symbol": "BTC/USDT", "quantity": 0.01, "unrealized_pnl": 0.0}],
+    })
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo, controller=controller)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["engine_running"] is True
+    assert data["active_strategy"] == "bollinger_reversion"
+    assert data["open_positions"] == 1
 
 
 # ── M1: control endpoints require API key when API_KEY is set ────────────────

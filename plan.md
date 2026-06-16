@@ -61,8 +61,8 @@ but is buried on the **Health** page only. Users can't tell the AI is working.
 
 - Deploy guides exist: `docs/deploy-gcp.md`, `docs/deploy-oracle.md` (systemd, swap,
   paper mode, prod 1h cadence). **Pick a host** (GCP ~$3/mo IP, Oracle free-but-capacity).
-- **Add:** a `/api/health` liveness endpoint + uptime/last-loop timestamp for monitoring.
-- **Add:** periodic `db/trades.db` backup off-host (cron + scp).
+- **DONE:** `/api/health` liveness endpoint (A6) + monitor hook documented.
+- **DONE:** daily `db/trades.db` snapshot cron + off-host scp documented in both guides.
 
 ---
 
@@ -96,8 +96,8 @@ use it. Remaining UX gaps:
 | A2 | **Single shared aiosqlite connection** for API + loop → all DB ops serialize through one thread | `main.py:139–186` | OK at current scale; document it, and verify the claimed SQLite→Postgres swap with a real connection pool before prod | M |
 | A3 | **Backtest data source = testnet (~12 days)** — too little history for meaningful backtests; mainnet is geo-blocked from this env | `api/main.py`, `data/fetcher.py` | Decide a real historical source: stored OHLCV dataset or a data provider; backtest reads from it, not the live testnet | M-L |
 | A4 | **Position/entry-price state not durable** — `entry_prices` in-memory, lost on restart (ponytail) | `exchange/binance.py:19` | Persist entry prices / open-position state so restart doesn't lose attribution (matters with real money) | M |
-| A5 | **Mocks hid real bugs** — OCO + DataFetcher bugs passed 255 unit tests because the exchange was mocked | `tests/` | Add a **testnet contract/smoke tier** exercising real exchange calls (balance, candle, order+OCO, cancel) in CI/pre-deploy; the OCO `hasattr` guard is the seed | M |
-| A6 | **Thin observability** — only Telegram alerts | `api/main.py` | `GET /api/health` liveness + last-loop timestamp + open-position count; host monitors it | S |
+| A5 | ~~Mocks hid real bugs~~ — **DONE.** `tests/test_contract_binance_testnet.py` exercises real testnet calls (balance, candle, DataFetcher-is-spot, MARKET buy + OCO protect + cancel). Opt-in via `RUN_CONTRACT_TESTS=1` (skipped in normal CI). Verified: 4 passed against testnet. | `tests/test_contract_binance_testnet.py` | ✓ |
+| A6 | ~~Thin observability~~ — **DONE.** `GET /api/health` → `{status, engine_running, active_strategy, open_positions, last_decision_at}`; a stale `last_decision_at` flags a stuck loop. Monitor hook documented in deploy guides. | `api/main.py` | ✓ |
 
 ## Suggested order
 
@@ -105,7 +105,12 @@ use it. Remaining UX gaps:
    Stop/Close (safety) and auth-error feedback.
 2. **P1** (½ day) → you can actually watch the AI decide.
 3. **P3 #13** (S) → flip rsi_macd from inert to trading so the soak yields data.
-4. **A5** (M) → testnet contract test tier, so real-exchange bugs can't hide behind mocks again.
-5. **P2 + U2/U4 + A2/A3/A4/A6 + Ops** → polish & harden before real-money go-live.
+4. **A5 + A6 + Ops** → DONE (contract test tier, /api/health, backup cron).
+5. **P0–P3, P2, U1, U3 all DONE.** Remaining before real-money go-live:
+   - **U2** (S) connection/stale indicator in the UI (WS already auto-reconnects).
+   - **U4** (S) local-time + currency formatting.
+   - **A3** (M-L) real historical data source for backtests (testnet ≈ 12 days; mainnet geo-blocked from the dev box).
+   - **A4** (M) persist entry-price/position state so a restart keeps attribution.
+   - **A2** (M) verify the SQLite→Postgres connection-pool path under prod load.
 
 > Note: A1 was investigated first and found to be a non-issue (see Architecture table). The engine already keeps the loop responsive via `engine.py:157`.

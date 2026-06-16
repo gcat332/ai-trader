@@ -1,6 +1,6 @@
 # risk/manager.py
 import uuid
-from core.models import Order, Position, Signal
+from core.models import Order
 
 
 class RiskManager:

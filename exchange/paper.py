@@ -170,5 +170,4 @@ class PaperExchange(Exchange):
         return fill
 
     def get_trade_log(self) -> list:
-        from core.models import TradeRecord
         return list(self._trade_log)

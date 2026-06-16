@@ -136,6 +136,15 @@ Everything persists in `db/trades.db`. Pull it down periodically:
 gcloud compute scp ai-trader:~/ai-trader/db/trades.db ./trades-$(date +%F).db
 ```
 
+On the VM, a daily local snapshot (keep 7 days) guards against DB corruption:
+```bash
+(crontab -l 2>/dev/null; echo '0 0 * * * cp ~/ai-trader/db/trades.db ~/ai-trader/db/trades-$(date +\%F).db && find ~/ai-trader/db -name "trades-*.db" -mtime +7 -delete') | crontab -
+```
+
+Health check for an uptime monitor: `GET http://localhost:8000/api/health` →
+`{status, engine_running, active_strategy, open_positions, last_decision_at}`.
+A stale `last_decision_at` means the trading loop has stopped ticking.
+
 Key endpoints / pages for the long-term test:
 `/api/pnl`, `/api/decisions/metrics`, `/api/strategy-switches`,
 `/api/compare` (real vs backtest equity, Sharpe, drawdown, win rate).
