@@ -1,0 +1,37 @@
+# fly.toml app configuration file generated for ai-trader-dawn-headland-9477 on 2026-06-16T09:58:20+07:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'ai-trader-dawn-headland-9477'
+primary_region = 'sin'
+
+[build]
+
+[env]
+  BINANCE_TESTNET = 'true'
+  ENGINE_STATE_PATH = '/app/db/engine_state.json'
+  LOOP_INTERVAL_SECONDS = '3600'
+  PAPER_TRADING = 'true'
+  STRATEGY_MODE = 'multi'      # MetaStrategy: 5 techniques, switchable live
+  ARBITER_MODE = 'rule'        # rule-based arbiter rotates the active technique (no Claude key)
+  DEFAULT_STRATEGY = 'rsi_macd'  # starting technique; arbiter/dashboard can switch it
+  TRADING_SYMBOL = 'BTC/USDT'
+  TRADING_TIMEFRAME = '1h'
+  # Listen on IPv6 (::) — Fly's private 6PN network (what `fly proxy` reaches via
+  # <app>.internal) is IPv6-only; 0.0.0.0 binds IPv4 only and is unreachable there.
+  # :: is dual-stack so it still accepts IPv4. Still not public — no [http_service];
+  # API_KEY secret guards it.
+  API_HOST = '::'
+
+[[mounts]]
+  source = 'data'
+  destination = '/app/db'
+
+# No [http_service]: this is a 24/7 background worker, not a web app. Re-adding it
+# with auto_stop_machines would let Fly halt the trading loop when idle. Reach the
+# dashboard via `fly proxy 8000:8000` (set API_HOST=0.0.0.0 + API_KEY secrets first).
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '1024mb'

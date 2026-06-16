@@ -1,0 +1,14 @@
+# Keep the image small + secrets out. dashboard/node_modules alone is 260M.
+.git
+.env
+dashboard
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+ai_trader.egg-info
+tests
+backtest_results
+logs
+db/*.db
+db/engine_state.json
