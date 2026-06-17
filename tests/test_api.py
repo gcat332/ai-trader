@@ -77,7 +77,8 @@ async def test_positions_falls_back_to_trade_history_without_exchange():
 
 
 @pytest.fixture
-async def client():
+async def client(monkeypatch):
+    monkeypatch.delenv("API_KEY", raising=False)
     async with aiosqlite.connect(":memory:") as conn:
         await init_db(conn)
         repo = Repository(conn)
@@ -119,6 +120,32 @@ async def test_get_strategies(client):
     resp = await client.get("/api/strategies")
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_get_strategies_uses_multiloop_controller():
+    controller = MagicMock()
+    controller.get_strategies = AsyncMock(return_value=[
+        {
+            "loop_id": "loop1",
+            "strategy_name": "ema_cross",
+            "strategy_instance_id": "loop1:ema_cross",
+            "mode": "LIVE",
+            "running": True,
+            "symbol": "BTC/USDT",
+            "timeframe": "1h",
+        }
+    ])
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo, controller=controller)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/strategies")
+
+    assert resp.status_code == 200
+    assert resp.json()[0]["loop_id"] == "loop1"
+    controller.get_strategies.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -180,15 +207,15 @@ async def test_control_endpoint_rejects_without_api_key(monkeypatch):
 async def test_control_endpoint_accepts_with_api_key(monkeypatch):
     monkeypatch.setenv("API_KEY", "s3cret")
     controller = MagicMock()
-    controller.pause = AsyncMock()
+    controller.stop_strategy = AsyncMock()
     async with aiosqlite.connect(":memory:") as conn:
         await init_db(conn)
         repo = Repository(conn)
         app = create_app(repo, controller=controller)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            resp = await ac.post("/api/strategies/rsi_macd/stop", headers={"X-API-Key": "s3cret"})
+            resp = await ac.post("/api/strategies/loop1/stop", headers={"X-API-Key": "s3cret"})
     assert resp.status_code == 200
-    controller.pause.assert_awaited_once()
+    controller.stop_strategy.assert_awaited_once_with("loop1")
 
 
 @pytest.mark.asyncio
@@ -196,15 +223,31 @@ async def test_control_endpoint_open_when_no_api_key(monkeypatch):
     """No API_KEY configured → control allowed (server is expected to be localhost-bound)."""
     monkeypatch.delenv("API_KEY", raising=False)
     controller = MagicMock()
-    controller.resume = AsyncMock()
+    controller.start_strategy = AsyncMock()
     async with aiosqlite.connect(":memory:") as conn:
         await init_db(conn)
         repo = Repository(conn)
         app = create_app(repo, controller=controller)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            resp = await ac.post("/api/strategies/rsi_macd/start")
+            resp = await ac.post("/api/strategies/loop1/start")
     assert resp.status_code == 200
-    controller.resume.assert_awaited_once()
+    controller.start_strategy.assert_awaited_once_with("loop1")
+
+
+@pytest.mark.asyncio
+async def test_control_endpoint_unknown_loop_returns_404(monkeypatch):
+    monkeypatch.delenv("API_KEY", raising=False)
+    controller = MagicMock()
+    controller.stop_strategy = AsyncMock(side_effect=KeyError("Unknown loop_id 'loop9'. Valid: loop1"))
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo, controller=controller)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post("/api/strategies/loop9/stop")
+
+    assert resp.status_code == 404
+    assert "Unknown loop_id" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

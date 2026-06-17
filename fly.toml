@@ -11,23 +11,37 @@ primary_region = 'sin'
 [env]
   BINANCE_TESTNET = 'true'
   LOOP_INTERVAL_SECONDS = '3600'
-  PAPER_TRADING = 'true'
+  PAPER_TRADING = 'false'
+  LIVE_TRADING_ENABLED = 'true'
   TRADING_SYMBOL = 'BTC/USDT'
   MAX_POSITION_PCT = '0.25'    # 25%/trade — spot has no liquidation (×confidence)
+  MAX_OPEN_POSITIONS = '5'
+  DAILY_LOSS_LIMIT_PCT = '0.03'
+  CONFIDENCE_THRESHOLD = '0.6'
+  MAX_DRAWDOWN_LIMIT_PCT = '0.10'
+  MAX_EXPOSURE_PCT = '0.80'
+  DAILY_REPORT_ENABLED = 'true'
+  WEEKLY_REPORT_ENABLED = 'true'
+  SUPERVISOR_RESTART_DELAY_SECONDS = '5'
 
   # Multi-loop (plan B/C): two best-fit strategies run concurrently on ONE spot
   # account, positions attributed per strategy. LOOPn_* overrides STRATEGY_MODE.
   ARBITER_MODE = 'rule'
+  STRATEGY_MODE = 'multi'
 
   # LOOP1 — ema_cross 1h, ATR 3/3 (backtest: win-rate 80%, +420 / 2yr)
   LOOP1_STRATEGY = 'ema_cross'
   LOOP1_TIMEFRAME = '1h'
+  LOOP1_MODE = 'LIVE'
+  LOOP1_ALLOCATION_PCT = '0.50'
   LOOP1_ATR_SL_MULT = '3.0'
   LOOP1_ATR_TP_MULT = '3.0'
 
   # LOOP2 — rsi_macd 4h, default mean-reversion (win-rate 57%, +67 / 2yr, Sharpe 27)
   LOOP2_STRATEGY = 'rsi_macd'
   LOOP2_TIMEFRAME = '4h'
+  LOOP2_MODE = 'LIVE'
+  LOOP2_ALLOCATION_PCT = '0.50'
   LOOP2_RSI_OVERSOLD = '35'
   LOOP2_RSI_OVERBOUGHT = '65'
   LOOP2_RSI_MACD_LONG_ONLY = 'false'
@@ -45,9 +59,10 @@ primary_region = 'sin'
   source = 'data'
   destination = '/app/db'
 
-# No [http_service]: this is a 24/7 background worker, not a web app. Re-adding it
-# with auto_stop_machines would let Fly halt the trading loop when idle. Reach the
-# dashboard via `fly proxy 8000:8000` (set API_HOST=0.0.0.0 + API_KEY secrets first).
+# No [http_service]: this is a 24/7 background worker, not a public web app.
+# Re-adding it with auto_stop_machines would let Fly halt the trading loop when
+# idle. For private backend/admin API access, use `fly proxy 8000:8000` and keep
+# API_KEY configured.
 
 [[vm]]
   size = 'shared-cpu-1x'

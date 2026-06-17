@@ -29,7 +29,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["core", "exchange", "data", "strategy", "risk", "backtest", "notifier", "api", "db", "ml"]
+packages = ["core", "exchange", "data", "strategy", "risk", "backtest", "notifier", "api", "db", "ml", "scheduler", "events"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

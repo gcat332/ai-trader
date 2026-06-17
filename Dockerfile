@@ -12,6 +12,8 @@ COPY strategy ./strategy
 COPY risk ./risk
 COPY backtest ./backtest
 COPY notifier ./notifier
+COPY scheduler ./scheduler
+COPY events ./events
 COPY api ./api
 COPY db ./db
 COPY ml ./ml

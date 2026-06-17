@@ -66,6 +66,26 @@ async def test_cancel_order(exchange):
 
 
 @pytest.mark.asyncio
+async def test_cancel_order_falls_back_to_oco_order_list_cancel():
+    with patch("exchange.binance.ccxt.binance") as MockBinance:
+        mock_ccxt = MagicMock()
+        mock_ccxt.cancel_order = AsyncMock(side_effect=Exception("unknown order"))
+        mock_ccxt.privateDeleteOrderList = AsyncMock(return_value={"orderListId": "oco-001"})
+        mock_ccxt.market_id = MagicMock(return_value="BTCUSDT")
+        mock_ccxt.set_sandbox_mode = MagicMock()
+        MockBinance.return_value = mock_ccxt
+
+        exch = BinanceExchange(api_key="test", api_secret="test", testnet=True)
+
+        await exch.cancel_order("oco-001", "BTC/USDT")
+
+        mock_ccxt.privateDeleteOrderList.assert_awaited_once_with({
+            "symbol": "BTCUSDT",
+            "orderListId": "oco-001",
+        })
+
+
+@pytest.mark.asyncio
 async def test_get_balance(exchange):
     balance = await exchange.get_balance()
     assert balance["USDT"] == pytest.approx(9500.0)
@@ -198,6 +218,32 @@ async def test_protect_position_places_oco_with_stop(exchange):
     assert params["side"] == "SELL"           # exit side opposite the entry
     assert params["stopPrice"] == 63500.0
     assert params["price"] == 67000.0
+
+
+@pytest.mark.asyncio
+async def test_protect_position_caps_sell_quantity_to_free_base_balance():
+    with patch("exchange.binance.ccxt.binance") as MockBinance:
+        mock_ccxt = MagicMock()
+        mock_ccxt.privatePostOrderOco = AsyncMock(return_value={
+            "orderListId": "oco-free-balance",
+        })
+        mock_ccxt.market_id = MagicMock(return_value="BTCUSDT")
+        mock_ccxt.amount_to_precision = MagicMock(side_effect=lambda s, a: a)
+        mock_ccxt.price_to_precision = MagicMock(side_effect=lambda s, p: p)
+        mock_ccxt.fetch_balance = AsyncMock(return_value={
+            "BTC": {"free": 0.009},
+        })
+        mock_ccxt.set_sandbox_mode = MagicMock()
+        MockBinance.return_value = mock_ccxt
+        exch = BinanceExchange(api_key="test", api_secret="test", testnet=True)
+
+        await exch.protect_position(
+            symbol="BTC/USDT", side="BUY", quantity=0.01,
+            take_profit=67000.0, stop_loss=63500.0, current_price=65000.0,
+        )
+
+        params = mock_ccxt.privatePostOrderOco.call_args.args[0]
+        assert params["quantity"] == pytest.approx(0.009)
 
 
 @pytest.mark.asyncio

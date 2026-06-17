@@ -1,12 +1,8 @@
-# api/main.py
-import asyncio
-import json
 import os
 from datetime import date
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from db.repository import Repository
-from api import bus
 
 
 async def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
@@ -20,15 +16,15 @@ async def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
 
 def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
     app = FastAPI(title="AI Trader API")
-    # Default to local dashboard dev origins, not "*" — the API exposes financial
-    # data and trading controls. Override with CORS_ORIGINS for other origins.
-    origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # CORS is opt-in because the API exposes financial data and trading controls.
+    origins = [o for o in os.getenv("CORS_ORIGINS", "").split(",") if o]
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     @app.get("/api/positions")
     async def get_positions():
@@ -77,44 +73,35 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
 
     @app.get("/api/strategies")
     async def get_strategies():
-        # Report the real engine state, not a hardcoded placeholder. Without a
-        # controller (read-only API server) status is genuinely unknown.
+        # Report the real loop-level runtime state. Without a controller
+        # (read-only API server) status is genuinely unknown.
         if controller is None:
             return [{"id": "unknown", "status": "unknown", "active": False}]
-        status = await controller.get_status()
-        active = status.get("strategy_id", "unknown")
-        running = status.get("running")
-        # In multi mode, list every technique (arbiter-managed) and flag the active
-        # one; in single mode this is just the one strategy.
-        techniques = status.get("techniques") or [active]
-        return [
-            {
-                "id": t,
-                "active": t == active,
-                "status": ("active" if t == active else "idle") if running else "stopped",
-            }
-            for t in techniques
-        ]
+        return await controller.get_strategies()
 
     @app.get("/api/strategies/available")
     async def get_available_strategies():
-        # The strategy ids that can be backtested / compared. Mirrors the builders
-        # in the backtest/run handler. Static set — the bot is Binance-spot only.
-        return ["rsi_macd", "bollinger_reversion", "ema_cross",
-                "trend_pullback", "liquidation_reversion"]
+        from core.strategy_registry import StrategyRegistry
+        return StrategyRegistry().available()
 
     @app.post("/api/strategies/{strategy_id}/start", dependencies=[Depends(require_api_key)])
     async def start_strategy(strategy_id: str):
         if controller is None:
             raise HTTPException(status_code=503, detail="Engine control not available on this server")
-        await controller.resume()
+        try:
+            await controller.start_strategy(strategy_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc).strip("'")) from None
         return {"id": strategy_id, "status": "running"}
 
     @app.post("/api/strategies/{strategy_id}/stop", dependencies=[Depends(require_api_key)])
     async def stop_strategy(strategy_id: str):
         if controller is None:
             raise HTTPException(status_code=503, detail="Engine control not available on this server")
-        await controller.pause()
+        try:
+            await controller.stop_strategy(strategy_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc).strip("'")) from None
         return {"id": strategy_id, "status": "stopped"}
 
     @app.get("/api/trades/history")
@@ -198,7 +185,7 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
 
         # on_candle (the CPU-heavy pandas-ta path) is already offloaded to a thread
         # inside engine.process_candles (engine.py:157), so this replay yields the
-        # event loop every candle and does not block the live trading loop / ws feed.
+        # event loop every candle and does not block the live trading loop.
         runner = BacktestRunner(
             strategy=builders[strategy_id](), risk_manager=RiskManager(),
             initial_balance={"USDT": 10000.0}, symbol=symbol, timeframe=timeframe,
@@ -253,23 +240,5 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
     @app.get("/api/strategy-switches")
     async def get_strategy_switches(limit: int = 50):
         return await repo.get_strategy_switches(limit=limit)
-
-    @app.websocket("/ws/feed")
-    async def websocket_feed(websocket: WebSocket):
-        await websocket.accept()
-        q = bus.subscribe()
-        try:
-            while True:
-                try:
-                    event = await asyncio.wait_for(q.get(), timeout=30.0)
-                    await websocket.send_text(json.dumps(event))
-                except asyncio.TimeoutError:
-                    # Send a heartbeat to keep the connection alive
-                    await websocket.send_text(json.dumps({"type": "heartbeat"}))
-                    continue
-        except WebSocketDisconnect:
-            pass
-        finally:
-            bus.unsubscribe(q)
 
     return app

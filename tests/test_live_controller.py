@@ -61,6 +61,60 @@ async def test_get_pnl(engine, repo):
 
 
 @pytest.mark.asyncio
+async def test_get_strategy_pnl_filters_by_loop_strategy_instance(engine, repo):
+    from datetime import date
+    from types import SimpleNamespace
+    from core.strategy_manager import StrategyManager
+    from core.strategy_runtime import StrategyRuntimeConfig
+
+    today = date.today().isoformat()
+    repo.get_trade_history = AsyncMock(return_value=[
+        {"strategy_id": "loop1:ema_cross", "realized_pnl": 100.0, "exit_time": today},
+        {"strategy_id": "loop2:rsi_macd", "realized_pnl": 900.0, "exit_time": today},
+        {"strategy_id": "loop1:ema_cross", "realized_pnl": -25.0, "exit_time": "2026-01-01"},
+    ])
+    cfg = StrategyRuntimeConfig(
+        loop_id="loop1",
+        label="LOOP1",
+        strategy_name="ema_cross",
+        strategy_instance_id="loop1:ema_cross",
+        symbol="BTC/USDT",
+        timeframe="1h",
+        mode="PAPER",
+        state_path="db/engine_state_LOOP1.json",
+        allocation_pct=None,
+    )
+    manager = StrategyManager([SimpleNamespace(config=cfg, engine=engine)])
+    ctrl = LiveEngineController(engine=engine, repo=repo, daily_start_balance=10000.0, manager=manager)
+
+    pnl = await ctrl.get_strategy_pnl("loop1")
+
+    assert pnl["daily"] == pytest.approx(100.0)
+    assert pnl["total"] == pytest.approx(75.0)
+    assert pnl["loop_id"] == "loop1"
+
+
+@pytest.mark.asyncio
+async def test_get_risk_status_returns_risk_manager_state(engine, repo):
+    from risk.manager import RiskManager
+
+    risk = RiskManager(max_drawdown_limit_pct=0.05)
+    risk.enable_global_kill_switch("manual")
+    ctrl = LiveEngineController(
+        engine=engine,
+        repo=repo,
+        daily_start_balance=10000.0,
+        risk_manager=risk,
+    )
+
+    status = await ctrl.get_risk_status()
+
+    assert status["global_kill_switch"] is True
+    assert status["global_kill_reason"] == "manual"
+    assert status["max_drawdown_limit_pct"] == pytest.approx(0.05)
+
+
+@pytest.mark.asyncio
 async def test_close_position_returns_true_when_found(engine, repo):
     ctrl = LiveEngineController(engine=engine, repo=repo, daily_start_balance=10000.0)
     result = await ctrl.close_position("BTC/USDT")

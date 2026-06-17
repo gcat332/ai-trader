@@ -2,6 +2,7 @@
 import pytest
 from datetime import datetime, timezone
 from pandas import DataFrame
+from core.allocation import AllocationManager
 from core.models import Signal
 from core.engine import Engine
 from exchange.paper import PaperExchange
@@ -109,3 +110,22 @@ async def test_engine_blocks_missing_sl(paper_exchange, risk_manager):
     await engine.process_candles(CANDLES)
     positions = await paper_exchange.get_positions()
     assert len(positions) == 0
+
+
+@pytest.mark.asyncio
+async def test_engine_scopes_buy_sizing_to_loop_allocation(paper_exchange, risk_manager):
+    engine = Engine(
+        exchange=paper_exchange,
+        strategy=BuyWithSlStrategy(),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=risk_manager,
+        allocation_manager=AllocationManager({"loop1": 0.4}),
+        loop_id="loop1",
+    )
+
+    await engine.process_candles(CANDLES)
+
+    positions = await paper_exchange.get_positions()
+    assert len(positions) == 1
+    assert positions[0].quantity == pytest.approx(4000.0 * 0.05 * 0.85 / 65000.0, rel=1e-2)

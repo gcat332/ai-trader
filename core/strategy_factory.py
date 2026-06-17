@@ -39,31 +39,8 @@ def build_named_strategy(name: str, get) -> BaseStrategy:
     concurrent loop configures itself from its own namespaced env (plan B/C).
     `get` returns strings (like os.getenv). Defaults match the best-fit configs
     found by the analysis sweeps."""
-    ml = DummyModel(confidence=float(get("ML_CONFIDENCE", "0.75")))
-    sl = float(get("ATR_SL_MULT", "2.0"))
-    tp = float(get("ATR_TP_MULT", "3.0"))
-
-    if name == "ema_cross":
-        from strategy.ema_cross import EmaCrossStrategy
-        return EmaCrossStrategy(ml_model=ml, atr_sl_mult=sl, atr_tp_mult=tp)
-    if name == "rsi_macd":
-        trend_ema = int(get("RSI_MACD_TREND_EMA", "200"))
-        return RsiMacdStrategy(
-            ml_model=ml,
-            rsi_oversold=float(get("RSI_OVERSOLD", "50")),
-            rsi_overbought=float(get("RSI_OVERBOUGHT", "50")),
-            atr_sl_mult=sl, atr_tp_mult=tp,
-            long_only=get("RSI_MACD_LONG_ONLY", "true").lower() == "true",
-            trend_filter_period=trend_ema if trend_ema > 0 else None,
-        )
-    if name == "trend_pullback":
-        from strategy.trend_pullback import TrendPullbackStrategy
-        return TrendPullbackStrategy(ml_model=ml, atr_sl_mult=sl, atr_tp_mult=tp)
-    if name == "liquidation_reversion":
-        from strategy.liquidation_reversion import LiquidationReversionStrategy
-        return LiquidationReversionStrategy(ml_model=ml)
-    raise ValueError(f"Unknown strategy {name!r}. Valid: ema_cross, rsi_macd, "
-                     "trend_pullback, liquidation_reversion")
+    from core.strategy_registry import StrategyRegistry
+    return StrategyRegistry().build(name, get)
 
 
 def build_strategy() -> BaseStrategy:

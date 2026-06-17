@@ -24,7 +24,7 @@ class MetaStrategy(BaseStrategy):
 
     @property
     def strategy_id(self) -> str:
-        # Report the active technique so get_status()/the dashboard show the real
+        # Report the active technique so status/reporting shows the real
         # strategy (e.g. "bollinger_reversion") instead of falling back to "unknown".
         return self._active
 

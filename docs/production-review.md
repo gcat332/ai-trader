@@ -1,6 +1,6 @@
 # Production Readiness Review — AI Trader
 
-_Date: 2026-06-16 · Scope: backend Python monolith + React dashboard · Reviewer role: Staff Architect / Production Readiness_
+_Date: 2026-06-16 · Updated 2026-06-17 · Scope: Telegram-first backend Python monolith · Reviewer role: Staff Architect / Production Readiness_
 
 ## Executive summary
 
@@ -41,7 +41,7 @@ that *were* made.
 
 ## Security concerns
 
-- **S1 — Unauthenticated control API.** Trading controls require `API_KEY` only when bound off-localhost; `main.py` warns but does not refuse. *Recommendation:* hard-fail startup if `API_HOST` is non-local and `API_KEY` is unset.
+- **S1 — Unauthenticated control API.** LIVE startup now hard-fails when `API_HOST` is non-local and `API_KEY` is unset. PAPER mode still only warns for local development convenience.
 - **S2 — Secrets via env / `.env`.** Correct approach. Confirm `.env` is git-ignored (it is) and document secret provisioning for prod (the deploy guides should reference a secret manager, not a copied `.env`).
 - **S3 — CORS** is env-driven (`CORS_ORIGINS`) — good; ensure prod is not `*`.
 - **S4 — Exchange-side OCO** protects open positions even across restarts; startup reconciliation surfaces untracked positions. Solid safety design.
@@ -80,7 +80,7 @@ that *were* made.
 
 ## Future recommendations (priority order)
 
-1. **Add `ruff` + a CI workflow** (`infrastructure/ci` or `.github/workflows`) running `ruff check`, `pytest`, and `dashboard` tests on PRs. Highest leverage, lowest effort.
+1. **Add `ruff` + a CI workflow** (`infrastructure/ci` or `.github/workflows`) running `ruff check` and `pytest` on PRs. Highest leverage, lowest effort.
 2. **Decouple the loop from engine internals** (A1) — small, prevents a class of future breakage.
 3. **Single technique registry** (A3) shared by the factory and the API.
 4. **Snapshot exchange state once per iteration** (P1).

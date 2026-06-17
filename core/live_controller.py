@@ -6,21 +6,49 @@ from notifier.engine_controller import EngineController
 
 class LiveEngineController(EngineController):
 
-    def __init__(self, engine, repo, daily_start_balance: float, extra_engines=None):
+    def __init__(self, engine, repo, daily_start_balance: float, extra_engines=None, manager=None, risk_manager=None):
         self._engine = engine
         self._repo = repo
         self._daily_start_balance = daily_start_balance
         # Plan B/C: extra concurrent-loop engines so pause/resume halt every loop,
-        # not just the primary one the dashboard reports status for.
+        # not just the primary one reported by legacy status paths.
         self._engines = [engine, *(extra_engines or [])]
+        self._manager = manager
+        self._risk_manager = risk_manager
 
     async def pause(self) -> None:
+        await self.stop_bot()
+
+    async def resume(self) -> None:
+        await self.start_bot()
+
+    async def start_bot(self) -> None:
+        if self._manager is not None:
+            self._manager.start_all()
+            return
+        for e in self._engines:
+            e.is_running = True
+
+    async def stop_bot(self) -> None:
+        if self._manager is not None:
+            self._manager.stop_all()
+            return
         for e in self._engines:
             e.is_running = False
 
-    async def resume(self) -> None:
-        for e in self._engines:
-            e.is_running = True
+    async def restart_bot(self) -> None:
+        await self.stop_bot()
+        await self.start_bot()
+
+    async def start_strategy(self, loop_id: str) -> None:
+        if self._manager is None:
+            raise KeyError(f"Unknown loop_id {loop_id!r}. Valid: legacy")
+        self._manager.start(loop_id)
+
+    async def stop_strategy(self, loop_id: str) -> None:
+        if self._manager is None:
+            raise KeyError(f"Unknown loop_id {loop_id!r}. Valid: legacy")
+        self._manager.stop(loop_id)
 
     async def get_status(self) -> dict:
         positions = await self._engine.exchange.get_positions()
@@ -29,7 +57,7 @@ class LiveEngineController(EngineController):
             "strategy_id": getattr(self._engine.strategy, "strategy_id", "unknown"),
             # In multi mode the strategy is a MetaStrategy holding several techniques
             # with one active at a time (arbiter-managed). Expose the full set so the
-            # dashboard shows all of them, not just the active one.
+            # status/reporting shows all of them, not just the active one.
             "techniques": getattr(self._engine.strategy, "strategy_ids", None),
             "open_positions": [
                 {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
@@ -39,6 +67,10 @@ class LiveEngineController(EngineController):
 
     async def get_pnl(self) -> dict:
         trades = await self._repo.get_trade_history()
+        return self._pnl_from_trades(trades)
+
+    @staticmethod
+    def _pnl_from_trades(trades: list[dict]) -> dict:
         total = sum(t.get("realized_pnl", 0) or 0 for t in trades)
         from datetime import date
         today = date.today().isoformat()
@@ -47,6 +79,86 @@ class LiveEngineController(EngineController):
             if (t.get("exit_time") or "")[:10] == today
         )
         return {"daily": daily, "total": total}
+
+    async def get_strategy_pnl(self, loop_id: str) -> dict:
+        status = await self.get_strategy_status(loop_id)
+        strategy_instance_id = status["strategy_instance_id"]
+        trades = await self._repo.get_trade_history(strategy_id=strategy_instance_id)
+        trades = [
+            t for t in trades
+            if t.get("strategy_id") in {strategy_instance_id, loop_id}
+        ]
+        pnl = self._pnl_from_trades(trades)
+        pnl.update({
+            "loop_id": loop_id,
+            "strategy_name": status["strategy_name"],
+            "strategy_instance_id": strategy_instance_id,
+        })
+        return pnl
+
+    async def get_strategies(self) -> list[dict]:
+        if self._manager is None:
+            status = await self.get_status()
+            return [{
+                "loop_id": "legacy",
+                "strategy_name": status["strategy_id"],
+                "strategy_instance_id": status["strategy_id"],
+                "mode": "unknown",
+                "running": status["running"],
+                "symbol": getattr(self._engine, "symbol", "unknown"),
+                "timeframe": getattr(self._engine, "timeframe", "unknown"),
+            }]
+        return [
+            {
+                "loop_id": r.config.loop_id,
+                "strategy_name": r.config.strategy_name,
+                "strategy_instance_id": r.config.strategy_instance_id,
+                "mode": r.config.mode,
+                "running": r.engine.is_running,
+                "symbol": r.config.symbol,
+                "timeframe": r.config.timeframe,
+                "allocation_pct": r.config.allocation_pct,
+            }
+            for r in self._manager.runtimes()
+        ]
+
+    async def get_strategy_status(self, loop_id: str) -> dict:
+        if self._manager is not None:
+            try:
+                runtime = self._manager.get(loop_id)
+            except KeyError:
+                valid = ", ".join(self._manager.loop_ids())
+                raise KeyError(f"Unknown loop_id {loop_id!r}. Valid: {valid}") from None
+            cfg = runtime.config
+            positions = await runtime.engine.exchange.get_positions()
+            return {
+                "loop_id": cfg.loop_id,
+                "strategy_name": cfg.strategy_name,
+                "strategy_instance_id": cfg.strategy_instance_id,
+                "mode": cfg.mode,
+                "running": runtime.engine.is_running,
+                "symbol": cfg.symbol,
+                "timeframe": cfg.timeframe,
+                "allocation_pct": cfg.allocation_pct,
+                "open_positions": [
+                    {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
+                    for p in positions
+                    if getattr(p, "strategy_id", cfg.strategy_instance_id) == cfg.strategy_instance_id
+                ],
+            }
+        strategies = await self.get_strategies()
+        for strategy in strategies:
+            if strategy["loop_id"] == loop_id:
+                return strategy
+        valid = ", ".join(s["loop_id"] for s in strategies)
+        raise KeyError(f"Unknown loop_id {loop_id!r}. Valid: {valid}")
+
+    async def get_risk_status(self) -> dict:
+        if self._risk_manager is None:
+            return {"available": False}
+        status = self._risk_manager.status()
+        status["available"] = True
+        return status
 
     async def close_position(self, symbol: str) -> bool:
         positions = await self._engine.exchange.get_positions()

@@ -11,23 +11,85 @@ class RiskManager:
         max_open_positions: int = 5,
         daily_loss_limit_pct: float = 0.03,
         confidence_threshold: float = 0.6,
+        max_drawdown_limit_pct: float | None = None,
+        max_exposure_pct: float | None = None,
     ):
         self._max_position_pct = max_position_pct
         self._max_open_positions = max_open_positions
         self._daily_loss_limit_pct = daily_loss_limit_pct
         self._confidence_threshold = confidence_threshold
+        self._max_drawdown_limit_pct = max_drawdown_limit_pct
+        self._max_exposure_pct = max_exposure_pct
         self._daily_start_balance: float | None = None
         self._current_balance: float | None = None
+        self._peak_balance: float | None = None
         self._last_rejection_reason: str | None = None
+        self._global_kill_switch = False
+        self._global_kill_reason: str | None = None
+        self._strategy_kill_switches: dict[str, str] = {}
+        self._circuit_breaker = False
+        self._circuit_reason: str | None = None
 
     def record_daily_start_balance(self, balance: float) -> None:
         self._daily_start_balance = balance
 
     def record_current_balance(self, balance: float) -> None:
         self._current_balance = balance
+        if self._peak_balance is None or balance > self._peak_balance:
+            self._peak_balance = balance
+        if self._max_drawdown_limit_pct is not None and self._peak_balance:
+            drawdown_pct = (self._peak_balance - balance) / self._peak_balance
+            if drawdown_pct >= self._max_drawdown_limit_pct:
+                self.trip_circuit_breaker("max_drawdown_limit")
+
+    def enable_global_kill_switch(self, reason: str = "manual") -> None:
+        self._global_kill_switch = True
+        self._global_kill_reason = reason
+
+    def disable_global_kill_switch(self) -> None:
+        self._global_kill_switch = False
+        self._global_kill_reason = None
+
+    def enable_strategy_kill_switch(self, strategy_id: str, reason: str = "manual") -> None:
+        self._strategy_kill_switches[strategy_id] = reason
+
+    def disable_strategy_kill_switch(self, strategy_id: str) -> None:
+        self._strategy_kill_switches.pop(strategy_id, None)
+
+    def trip_circuit_breaker(self, reason: str) -> None:
+        self._circuit_breaker = True
+        self._circuit_reason = reason
+
+    def reset_circuit_breaker(self) -> None:
+        self._circuit_breaker = False
+        self._circuit_reason = None
+
+    def status(self) -> dict:
+        return {
+            "global_kill_switch": self._global_kill_switch,
+            "global_kill_reason": self._global_kill_reason,
+            "strategy_kill_switches": dict(self._strategy_kill_switches),
+            "circuit_breaker": self._circuit_breaker,
+            "circuit_reason": self._circuit_reason,
+            "daily_loss_limit_pct": self._daily_loss_limit_pct,
+            "max_drawdown_limit_pct": self._max_drawdown_limit_pct,
+            "max_exposure_pct": self._max_exposure_pct,
+            "daily_start_balance": self._daily_start_balance,
+            "current_balance": self._current_balance,
+            "peak_balance": self._peak_balance,
+        }
 
     def evaluate(self, signal, balance, positions) -> Order | None:
         self._last_rejection_reason = None
+        if self._global_kill_switch:
+            self._last_rejection_reason = "global_kill_switch"
+            return None
+        if self._circuit_breaker:
+            self._last_rejection_reason = "circuit_breaker"
+            return None
+        if signal.strategy_id in self._strategy_kill_switches:
+            self._last_rejection_reason = "strategy_kill_switch"
+            return None
         if signal.side == "HOLD":
             self._last_rejection_reason = "hold"
             return None
@@ -39,6 +101,7 @@ class RiskManager:
             return None
         if self._daily_loss_exceeded():
             self._last_rejection_reason = "daily_loss_limit"
+            self.trip_circuit_breaker("daily_loss_limit")
             return None
 
         # Plan B: two strategies may hold the same symbol concurrently, so re-entry
@@ -58,6 +121,10 @@ class RiskManager:
             if any(p.symbol in _CORRELATED and p.symbol != signal.symbol for p in positions):
                 self._last_rejection_reason = "correlation_filter"
                 return None
+
+        if signal.side == "BUY" and self._max_exposure_exceeded(balance, positions):
+            self._last_rejection_reason = "max_exposure"
+            return None
 
         # Signal-quality gate LAST — the signal is otherwise structurally eligible, so a
         # rejection here is genuinely about confidence (not masking a more specific reason).
@@ -98,9 +165,22 @@ class RiskManager:
         """Call at UTC midnight to start a new trading day."""
         self._daily_start_balance = balance
         self._current_balance = balance
+        if self._peak_balance is None or balance > self._peak_balance:
+            self._peak_balance = balance
+        if self._circuit_reason == "daily_loss_limit":
+            self.reset_circuit_breaker()
 
     def _daily_loss_exceeded(self) -> bool:
         if self._daily_start_balance is None or self._current_balance is None:
             return False
         loss_pct = (self._daily_start_balance - self._current_balance) / self._daily_start_balance
         return loss_pct >= self._daily_loss_limit_pct
+
+    def _max_exposure_exceeded(self, balance: dict, positions) -> bool:
+        if self._max_exposure_pct is None:
+            return False
+        exposure = sum((p.entry_price or 0.0) * p.quantity for p in positions)
+        equity_proxy = balance.get("USDT", 0.0) + exposure
+        if equity_proxy <= 0:
+            return False
+        return (exposure / equity_proxy) >= self._max_exposure_pct

@@ -183,3 +183,49 @@ def test_rejection_reason_re_entry(risk):
     pos = _open_position("BTC/USDT", strategy_id="rsi_macd")
     risk.evaluate(_buy_signal(), {"USDT": 10000.0}, [pos])
     assert risk.last_rejection_reason == "re_entry"
+
+
+def test_global_kill_switch_blocks_all_new_orders():
+    risk = RiskManager()
+    risk.enable_global_kill_switch("operator requested")
+
+    assert risk.evaluate(_buy_signal(), {"USDT": 10000.0}, []) is None
+    assert risk.last_rejection_reason == "global_kill_switch"
+    assert risk.status()["global_kill_switch"] is True
+
+
+def test_strategy_kill_switch_blocks_only_matching_strategy():
+    risk = RiskManager()
+    risk.enable_strategy_kill_switch("loop1:ema_cross", "strategy emergency stop")
+    blocked = _buy_signal()
+    blocked.strategy_id = "loop1:ema_cross"
+    allowed = _buy_signal()
+    allowed.strategy_id = "loop2:rsi_macd"
+
+    assert risk.evaluate(blocked, {"USDT": 10000.0}, []) is None
+    assert risk.last_rejection_reason == "strategy_kill_switch"
+    assert risk.evaluate(allowed, {"USDT": 10000.0}, []) is not None
+
+
+def test_max_drawdown_trips_circuit_breaker_when_enabled():
+    risk = RiskManager(max_drawdown_limit_pct=0.05)
+    risk.record_current_balance(10000.0)
+    risk.record_current_balance(9400.0)
+
+    assert risk.evaluate(_buy_signal(), {"USDT": 9400.0}, []) is None
+    assert risk.last_rejection_reason == "circuit_breaker"
+    status = risk.status()
+    assert status["circuit_breaker"] is True
+    assert status["circuit_reason"] == "max_drawdown_limit"
+
+
+def test_max_exposure_blocks_new_buy_when_enabled():
+    risk = RiskManager(max_exposure_pct=0.35)
+    positions = [
+        _open_position("BTC/USDT", strategy_id="loop1:ema_cross"),
+    ]
+    positions[0].entry_price = 60000.0
+    positions[0].quantity = 0.1  # 6000 notional; account equity proxy = 10000 + 6000
+
+    assert risk.evaluate(_buy_signal(), {"USDT": 10000.0}, positions) is None
+    assert risk.last_rejection_reason == "max_exposure"

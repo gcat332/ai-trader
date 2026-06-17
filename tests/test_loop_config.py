@@ -32,3 +32,22 @@ def test_getter_namespaces_then_falls_back_to_global_then_default():
 def test_timeframe_defaults_to_global():
     loops = parse_loops({"LOOP1_STRATEGY": "ema_cross", "TRADING_TIMEFRAME": "30m"})
     assert loops[0].timeframe == "30m"
+
+
+def test_parse_loop_preserves_label_and_strategy_settings():
+    loops = parse_loops({
+        "LOOP1_STRATEGY": "ema_cross",
+        "LOOP1_TIMEFRAME": "1h",
+        "LOOP1_ATR_SL_MULT": "3.0",
+        "TRADING_SYMBOL": "BTC/USDT",
+    })
+
+    assert len(loops) == 1
+    assert loops[0].label == "LOOP1"
+    assert loops[0].strategy == "ema_cross"
+    assert loops[0].timeframe == "1h"
+    assert loops[0].get("ATR_SL_MULT", "2.0") == "3.0"
+
+
+def test_loop_parser_keeps_legacy_single_loop_when_no_loop_strategy():
+    assert parse_loops({"STRATEGY_MODE": "multi", "TRADING_SYMBOL": "BTC/USDT"}) == []

@@ -145,10 +145,44 @@ def test_format_daily_summary():
         rejected=3,
         hold=8,
         rejection_breakdown={"low_confidence": 2, "correlation_filter": 1},
+        day="2026-06-17",
+        day_pnl=125.50,
+        total_pnl=842.25,
+        wins=3,
+        trades=4,
+        balance=10042.25,
+        trade_rows=[
+            {"strategy_id": "loop1:ema_cross", "realized_pnl": 100.0},
+            {"strategy_id": "loop1:ema_cross", "realized_pnl": -25.0},
+            {"strategy_id": "loop2:rsi_macd", "realized_pnl": 50.5},
+            {"strategy_id": "loop2:rsi_macd", "realized_pnl": 0.0},
+        ],
     )
-    assert "15" in text
-    assert "4" in text
-    assert "placed" in text.lower() or "PLACED" in text
+    assert text.splitlines()[0] == "Daily Summary"
+    assert "Trades: 4" in text
+    assert "PnL: +$125.50" in text
+    assert "Win rate: 75% (3/4 trades)" in text
+    assert "Strategies:" in text
+    assert "loop1:ema_cross: +$75.00" in text
+    assert "loop2:rsi_macd: +$50.50" in text
+    assert "Decisions:" not in text
+    assert "Balance:" not in text
+
+
+def test_format_weekly_summary_groups_strategy_pnl():
+    from notifier.telegram import format_weekly_summary
+
+    text = format_weekly_summary([
+        {"strategy_id": "loop1:ema_cross", "realized_pnl": 100.0},
+        {"strategy_id": "loop1:ema_cross", "realized_pnl": -25.0},
+        {"strategy_id": "loop2:rsi_macd", "realized_pnl": 10.0},
+    ])
+
+    assert "Weekly Summary" in text
+    assert "Trades: 3" in text
+    assert "Win rate: 67%" in text
+    assert "loop1:ema_cross" in text
+    assert "$75.00" in text
 
 
 def test_format_drift_alert():
@@ -204,6 +238,23 @@ def test_format_strategy_switch():
                         decision="SWAP", reason="rsi_macd weak in SIDEWAYS (36%) → bollinger (62%)")
     text = format_strategy_switch(sw)
     assert "SWAP" in text and "SIDEWAYS" in text and "bollinger_reversion" in text
+
+
+@pytest.mark.asyncio
+async def test_send_weekly_summary_uses_trade_history():
+    notifier = TelegramNotifier(token="fake", chat_id="123", controller=MagicMock())
+    notifier.send = AsyncMock()
+    repo = MagicMock()
+    repo.get_trade_history = AsyncMock(return_value=[
+        {"strategy_id": "loop1:ema_cross", "realized_pnl": 100.0},
+    ])
+
+    await notifier.send_weekly_summary(repo)
+
+    repo.get_trade_history.assert_awaited_once()
+    text = notifier.send.call_args[0][0]
+    assert "Weekly Summary" in text
+    assert "loop1:ema_cross" in text
 
 
 @pytest.mark.asyncio

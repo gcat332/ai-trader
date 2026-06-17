@@ -24,6 +24,8 @@ class Engine:
         repo=None,
         ab_tester=None,
         state_path: str | None = None,
+        allocation_manager=None,
+        loop_id: str | None = None,
     ):
         self.exchange = exchange
         self.strategy = strategy
@@ -32,6 +34,8 @@ class Engine:
         self._risk_manager = risk_manager
         self._repo = repo
         self._ab_tester = ab_tester
+        self._allocation_manager = allocation_manager
+        self._loop_id = loop_id
         self.is_running: bool = True
         self._regime_classifier = RegimeClassifier()
         # Maps symbol → (decision_id, confidence, challenger_conf, regime, strategy_id)
@@ -151,7 +155,7 @@ class Engine:
         regime = self._regime_classifier.classify(df)
 
         # Offload on_candle to a thread: ClaudeStrategy makes a blocking HTTP call, and the
-        # trading loop shares its event loop with the uvicorn dashboard/WebSocket — a sync call
+        # trading loop shares its event loop with the API/Telegram runtime — a sync call
         # here would freeze both for the API's duration. to_thread keeps on_candle sync (no
         # cross-cutting async refactor of BaseStrategy) while unblocking the loop.
         signal: Signal = await asyncio.to_thread(self.strategy.on_candle, self.symbol, df)
@@ -169,6 +173,8 @@ class Engine:
 
         if self._risk_manager is not None:
             balance = await self.exchange.get_balance()
+            if self._allocation_manager is not None and self._loop_id is not None:
+                balance = self._allocation_manager.scoped_balance(self._loop_id, balance)
             positions = await self.exchange.get_positions()
             order = self._risk_manager.evaluate(signal, balance, positions)
             rejection = self._risk_manager.last_rejection_reason

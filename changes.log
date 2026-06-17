@@ -1,0 +1,30 @@
+# AI Agent Handoff Log
+
+Agents must read this file before starting work.
+
+Rules:
+- append only
+- never delete entries
+
+Entry format:
+
+---
+Timestamp:
+Agent:
+Task:
+Files Modified:
+Summary:
+Notes for Next Agent:
+---
+---
+Timestamp: 2026-06-17 20:00:24 +07
+Agent: Codex
+Task: Define shared Claude/Codex agent coordination docs
+Files Modified: AGENTS.md, CLAUDE.md, project_context.md, changes.log
+Summary: Restored AGENTS.md as Codex-specific instructions, aligned CLAUDE.md
+with Claude Code responsibilities, expanded project_context.md with the
+Telegram-first multi-loop backend overview, and recorded the shared handoff
+log format.
+Notes for Next Agent: Read project_context.md first, then changes.log. Treat
+changes.log as append-only. Do not commit .env or local artifacts.
+---

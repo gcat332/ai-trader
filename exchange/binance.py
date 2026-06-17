@@ -117,12 +117,22 @@ class BinanceExchange(Exchange):
         if stop_loss is None:
             return None
         exit_side = "SELL" if side.upper() == "BUY" else "BUY"
+        protected_quantity = quantity
+        if exit_side == "SELL":
+            try:
+                raw_balance = await self._exchange.fetch_balance()
+                asset = symbol.split("/")[0]
+                info = raw_balance.get(asset)
+                if isinstance(info, dict) and "free" in info:
+                    protected_quantity = min(quantity, float(info["free"]))
+            except Exception:
+                protected_quantity = quantity
         protective = Order(
             id=str(uuid.uuid4()),
             symbol=symbol,
             side=exit_side,
             type="OCO" if take_profit is not None else "STOP_MARKET",
-            quantity=quantity,
+            quantity=protected_quantity,
             price=take_profit if take_profit is not None else stop_loss,
             status="PENDING",
             exchange_order_id=None,
@@ -133,7 +143,16 @@ class BinanceExchange(Exchange):
         return await self.place_order(protective, current_price=current_price, stop_price=stop_loss)
 
     async def cancel_order(self, order_id: str, symbol: str) -> None:
-        await self._exchange.cancel_order(order_id, symbol)
+        try:
+            await self._exchange.cancel_order(order_id, symbol)
+        except Exception as original:
+            try:
+                await self._exchange.privateDeleteOrderList({
+                    "symbol": self._exchange.market_id(symbol),
+                    "orderListId": order_id,
+                })
+            except Exception:
+                raise original
 
     async def get_positions(self) -> list[Position]:
         # Spot has no fetch_positions endpoint — holdings live as balances. But NOT

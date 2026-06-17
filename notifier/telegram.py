@@ -39,24 +39,53 @@ def format_daily_summary(
     wins: int | None = None,
     trades: int | None = None,
     balance: float | None = None,
+    trade_rows: list[dict] | None = None,
 ) -> str:
-    breakdown = ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in rejection_breakdown.items())
-    title = f"📊 Daily Decision Summary — {day}" if day else "📊 Daily Decision Summary"
     lines = [
-        title,
-        f"Total evaluated: {total_evaluated}",
-        f"✅ Placed: {placed}  |  ⛔ Rejected: {rejected}  |  ⏸ Hold: {hold}",
+        "Daily Summary",
     ]
-    if breakdown:
-        lines.append(f"Rejections: {breakdown}")
-    # Performance block (omitted when no perf data is passed, e.g. legacy callers).
+    if trades is not None:
+        lines.append(f"Trades: {trades}")
     if day_pnl is not None:
-        lines.append(f"💰 PnL: {_money(day_pnl)} (day)  |  {_money(total_pnl or 0)} (total)")
+        lines.append(f"PnL: {_money(day_pnl)}")
     if trades is not None:
         win_rate = (wins / trades) if trades else 0.0
-        lines.append(f"🎯 Win rate: {win_rate:.0%} ({wins or 0}/{trades} trades)")
-    if balance is not None:
-        lines.append(f"🏦 Balance: ${balance:,.2f} USDT")
+        lines.append(f"Win rate: {win_rate:.0%} ({wins or 0}/{trades} trades)")
+    if trade_rows:
+        by_strategy: dict[str, dict[str, float | int]] = {}
+        for trade in trade_rows:
+            strategy_id = trade.get("strategy_id") or "unknown"
+            pnl = trade.get("realized_pnl") or 0.0
+            row = by_strategy.setdefault(strategy_id, {"pnl": 0.0, "wins": 0, "trades": 0})
+            row["pnl"] = float(row["pnl"]) + pnl
+            row["trades"] = int(row["trades"]) + 1
+            if pnl > 0:
+                row["wins"] = int(row["wins"]) + 1
+        lines.append("Strategies:")
+        for strategy_id, row in sorted(by_strategy.items()):
+            lines.append(f"  • {strategy_id}: {_money(float(row['pnl']))}")
+    return "\n".join(lines)
+
+
+def format_weekly_summary(trades: list[dict]) -> str:
+    total_pnl = sum((t.get("realized_pnl") or 0) for t in trades)
+    wins = sum(1 for t in trades if (t.get("realized_pnl") or 0) > 0)
+    win_rate = (wins / len(trades)) if trades else 0.0
+    by_strategy: dict[str, float] = {}
+    for trade in trades:
+        strategy_id = trade.get("strategy_id") or "unknown"
+        by_strategy[strategy_id] = by_strategy.get(strategy_id, 0.0) + (trade.get("realized_pnl") or 0)
+
+    lines = [
+        "Weekly Summary",
+        f"Trades: {len(trades)}",
+        f"PnL: {_money(total_pnl)}",
+        f"Win rate: {win_rate:.0%} ({wins}/{len(trades)} trades)",
+    ]
+    if by_strategy:
+        lines.append("Strategies:")
+        for strategy_id, pnl in sorted(by_strategy.items()):
+            lines.append(f"  • {strategy_id}: {_money(pnl)}")
     return "\n".join(lines)
 
 
@@ -95,6 +124,80 @@ def format_strategy_switch(sw) -> str:
             f"{sw.from_strategy} → {sw.to_strategy}\n{sw.reason}")
 
 
+def format_strategy_list(strategies: list[dict]) -> str:
+    lines = ["Strategies"]
+    for s in strategies:
+        state = "running" if s.get("running") else "stopped"
+        alloc = s.get("allocation_pct")
+        alloc_text = f"{alloc:.0%}" if isinstance(alloc, float) else "unset"
+        positions = s.get("open_positions") or []
+        lines.extend([
+            "",
+            f"{s['loop_id']} / {s['strategy_name']}",
+            f"Mode: {s.get('mode', 'unknown')}",
+            f"State: {state}",
+            f"Symbol: {s.get('symbol', 'unknown')}",
+            f"Timeframe: {s.get('timeframe', 'unknown')}",
+            f"Allocation: {alloc_text}",
+        ])
+        if positions:
+            lines.append("Open positions:")
+            lines.extend(
+                f"  • {p['symbol']} qty={p['quantity']} unrealized=${p['unrealized_pnl']:.2f}"
+                for p in positions
+            )
+    return "\n".join(lines)
+
+
+def format_strategy_status_summary(strategies: list[dict]) -> str:
+    running = sum(1 for s in strategies if s.get("running"))
+    return f"Strategies: {running} running / {len(strategies)} total\n\n{format_strategy_list(strategies)}"
+
+
+def format_pnl_summary(total_pnl: dict, strategy_pnls: list[dict]) -> str:
+    lines = [
+        "📊 P&L",
+        f"Daily:  ${total_pnl['daily']:,.2f}",
+        f"Total:  ${total_pnl['total']:,.2f}",
+    ]
+    for pnl in strategy_pnls:
+        lines.extend([
+            "",
+            f"{pnl.get('loop_id', 'unknown')} / {pnl.get('strategy_name', 'unknown')}",
+            f"Daily:  ${pnl['daily']:,.2f}",
+            f"Total:  ${pnl['total']:,.2f}",
+        ])
+    return "\n".join(lines)
+
+
+def _pct(value) -> str:
+    return "unset" if value is None else f"{float(value):.0%}"
+
+
+def format_risk_status(status: dict) -> str:
+    if not status.get("available", True):
+        return "Risk Status\nUnavailable"
+    strategy_stops = status.get("strategy_kill_switches") or {}
+    lines = [
+        "Risk Status",
+        f"Global kill switch: {'ON' if status.get('global_kill_switch') else 'off'}",
+        f"Circuit breaker: {'ON' if status.get('circuit_breaker') else 'off'}",
+        f"Daily loss limit: {_pct(status.get('daily_loss_limit_pct'))}",
+        f"Max drawdown: {_pct(status.get('max_drawdown_limit_pct'))}",
+        f"Max exposure: {_pct(status.get('max_exposure_pct'))}",
+    ]
+    if status.get("global_kill_reason"):
+        lines.append(f"Global reason: {status['global_kill_reason']}")
+    if status.get("circuit_reason"):
+        lines.append(f"Circuit reason: {status['circuit_reason']}")
+    if strategy_stops:
+        lines.append("Strategy stops:")
+        lines.extend(f"  • {sid}: {reason}" for sid, reason in strategy_stops.items())
+    else:
+        lines.append("Strategy stops: none")
+    return "\n".join(lines)
+
+
 def format_ab_result(result: "ABTestResult") -> str:
     if result.outcome == "CHALLENGER_APPLIED":
         emoji = "✅"
@@ -116,6 +219,19 @@ class TelegramNotifier:
         self._chat_id = chat_id
         self._controller = controller
         self._app = None  # initialized in start()
+
+    def _authorized(self, update) -> bool:
+        chat = getattr(update, "effective_chat", None)
+        chat_id = getattr(chat, "id", None)
+        if chat_id is None or not isinstance(chat_id, (int, str)):
+            return True
+        return str(chat_id) == str(self._chat_id)
+
+    async def _reject_if_unauthorized(self, update) -> bool:
+        if self._authorized(update):
+            return False
+        await update.message.reply_text("Unauthorized chat.")
+        return True
 
     async def send(self, text: str) -> None:
         if self._app is None:
@@ -168,9 +284,14 @@ class TelegramNotifier:
 
         text = format_daily_summary(
             total, placed, rejected, hold, breakdown, day=day,
-            day_pnl=day_pnl, total_pnl=total_pnl, wins=wins, trades=n, balance=balance,
+            day_pnl=day_pnl, total_pnl=total_pnl, wins=wins, trades=n,
+            balance=balance, trade_rows=day_trades,
         )
         await self.send(text)
+
+    async def send_weekly_summary(self, repo) -> None:
+        trades = await repo.get_trade_history()
+        await self.send(format_weekly_summary(trades))
 
     async def send_drift_alert(self, event) -> None:
         from notifier.telegram import format_drift_alert
@@ -190,7 +311,31 @@ class TelegramNotifier:
 
     # ── Command handlers ──────────────────────────────────────────────────
 
+    async def cmd_help(self, update, context) -> None:
+        await update.message.reply_text(
+            "Commands:\n"
+            "/status\n/pnl\n/strategies\n/strategy_status <loop_id>\n"
+            "/start_bot\n/stop_bot\n/restart_bot\n"
+            "/start_strategy <loop_id>\n/stop_strategy <loop_id>\n"
+            "/portfolio\n/open_positions\n/closed_positions\n"
+            "/signals\n/allocation\n/risk_status\n/health"
+        )
+
     async def cmd_status(self, update, context) -> None:
+        args = getattr(context, "args", []) if context else []
+        if args:
+            try:
+                status = await self._controller.get_strategy_status(args[0])
+            except KeyError as exc:
+                await update.message.reply_text(str(exc))
+                return
+            await update.message.reply_text(format_strategy_list([status]))
+            return
+        strategies = await self._controller.get_strategies()
+        if isinstance(strategies, list) and strategies:
+            await update.message.reply_text(format_strategy_status_summary(strategies))
+            return
+
         status = await self._controller.get_status()
         positions = status.get("open_positions", [])
         pos_text = "\n".join(
@@ -204,6 +349,67 @@ class TelegramNotifier:
         )
         await update.message.reply_text(text)
 
+    async def cmd_strategies(self, update, context) -> None:
+        strategies = await self._controller.get_strategies()
+        await update.message.reply_text(format_strategy_list(strategies))
+
+    async def cmd_strategy_status(self, update, context) -> None:
+        if not context.args:
+            await update.message.reply_text("Usage: /strategy_status <loop_id>")
+            return
+        try:
+            status = await self._controller.get_strategy_status(context.args[0])
+        except KeyError as exc:
+            await update.message.reply_text(str(exc))
+            return
+        await update.message.reply_text(format_strategy_list([status]))
+
+    async def cmd_start_bot(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
+        await self._controller.start_bot()
+        await update.message.reply_text("Bot started.")
+
+    async def cmd_stop_bot(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
+        await self._controller.stop_bot()
+        await update.message.reply_text("Bot stopped. Open exchange-side protection is unchanged.")
+
+    async def cmd_restart_bot(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
+        await self._controller.restart_bot()
+        await update.message.reply_text("Bot restarted.")
+
+    async def cmd_start_strategy(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /start_strategy <loop_id>")
+            return
+        loop_id = context.args[0]
+        try:
+            await self._controller.start_strategy(loop_id)
+        except KeyError as exc:
+            await update.message.reply_text(str(exc))
+            return
+        await update.message.reply_text(f"{loop_id} started.")
+
+    async def cmd_stop_strategy(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /stop_strategy <loop_id>")
+            return
+        loop_id = context.args[0]
+        try:
+            await self._controller.stop_strategy(loop_id)
+        except KeyError as exc:
+            await update.message.reply_text(str(exc))
+            return
+        await update.message.reply_text(f"{loop_id} stopped.")
+
     async def cmd_pause(self, update, context) -> None:
         await self._controller.pause()
         await update.message.reply_text("⏸ Bot paused — no new orders will be placed.")
@@ -213,12 +419,74 @@ class TelegramNotifier:
         await update.message.reply_text("▶️ Bot resumed.")
 
     async def cmd_pnl(self, update, context) -> None:
-        pnl = await self._controller.get_pnl()
+        args = getattr(context, "args", []) if context else []
+        if args:
+            try:
+                pnl = await self._controller.get_strategy_pnl(args[0])
+            except KeyError as exc:
+                await update.message.reply_text(str(exc))
+                return
+            title = f"📊 P&L — {pnl.get('loop_id', args[0])} / {pnl.get('strategy_name', 'unknown')}"
+        else:
+            pnl = await self._controller.get_pnl()
+            strategies = await self._controller.get_strategies()
+            if isinstance(strategies, list) and strategies:
+                strategy_pnls = []
+                for strategy in strategies:
+                    try:
+                        strategy_pnls.append(await self._controller.get_strategy_pnl(strategy["loop_id"]))
+                    except KeyError:
+                        continue
+                await update.message.reply_text(format_pnl_summary(pnl, strategy_pnls))
+                return
+            title = "📊 P&L"
         await update.message.reply_text(
-            f"📊 P&L\n"
+            f"{title}\n"
             f"Daily:  ${pnl['daily']:,.2f}\n"
             f"Total:  ${pnl['total']:,.2f}"
         )
+
+    async def cmd_portfolio(self, update, context) -> None:
+        status = await self._controller.get_status()
+        await update.message.reply_text(f"Open positions: {len(status.get('open_positions') or [])}")
+
+    async def cmd_open_positions(self, update, context) -> None:
+        status = await self._controller.get_status()
+        positions = status.get("open_positions") or []
+        if not positions:
+            await update.message.reply_text("Open positions: none")
+            return
+        await update.message.reply_text("\n".join(
+            f"{p['symbol']} qty={p['quantity']} unrealized={p['unrealized_pnl']:.2f}"
+            for p in positions
+        ))
+
+    async def cmd_closed_positions(self, update, context) -> None:
+        pnl = await self._controller.get_pnl()
+        await update.message.reply_text(f"Closed position P&L total: {pnl['total']:,.2f}")
+
+    async def cmd_signals(self, update, context) -> None:
+        await update.message.reply_text("Recent signals are available in strategy reports after migration.")
+
+    async def cmd_allocation(self, update, context) -> None:
+        strategies = await self._controller.get_strategies()
+        lines = ["Allocation"]
+        for s in strategies:
+            pct = s.get("allocation_pct")
+            if isinstance(pct, float):
+                lines.append(f"{s['loop_id']} / {s['strategy_name']}: {pct:.0%}")
+            else:
+                lines.append(f"{s['loop_id']} / {s['strategy_name']}: unset")
+        await update.message.reply_text("\n".join(lines))
+
+    async def cmd_risk_status(self, update, context) -> None:
+        status = await self._controller.get_risk_status()
+        await update.message.reply_text(format_risk_status(status))
+
+    async def cmd_health(self, update, context) -> None:
+        strategies = await self._controller.get_strategies()
+        running = sum(1 for s in strategies if s.get("running"))
+        await update.message.reply_text(f"Health: ok\nRunning loops: {running}/{len(strategies)}")
 
     async def cmd_close(self, update, context) -> None:
         if not context.args:
@@ -235,10 +503,26 @@ class TelegramNotifier:
         """Build and start the Telegram Application. Call once at bot startup."""
         from telegram.ext import Application, CommandHandler
         self._app = Application.builder().token(self._token).build()
+        self._app.add_handler(CommandHandler("start", self.cmd_help))
+        self._app.add_handler(CommandHandler("help", self.cmd_help))
         self._app.add_handler(CommandHandler("status", self.cmd_status))
+        self._app.add_handler(CommandHandler("strategies", self.cmd_strategies))
+        self._app.add_handler(CommandHandler("strategy_status", self.cmd_strategy_status))
+        self._app.add_handler(CommandHandler("start_bot", self.cmd_start_bot))
+        self._app.add_handler(CommandHandler("stop_bot", self.cmd_stop_bot))
+        self._app.add_handler(CommandHandler("restart_bot", self.cmd_restart_bot))
+        self._app.add_handler(CommandHandler("start_strategy", self.cmd_start_strategy))
+        self._app.add_handler(CommandHandler("stop_strategy", self.cmd_stop_strategy))
         self._app.add_handler(CommandHandler("pause", self.cmd_pause))
         self._app.add_handler(CommandHandler("resume", self.cmd_resume))
         self._app.add_handler(CommandHandler("pnl", self.cmd_pnl))
+        self._app.add_handler(CommandHandler("portfolio", self.cmd_portfolio))
+        self._app.add_handler(CommandHandler("open_positions", self.cmd_open_positions))
+        self._app.add_handler(CommandHandler("closed_positions", self.cmd_closed_positions))
+        self._app.add_handler(CommandHandler("signals", self.cmd_signals))
+        self._app.add_handler(CommandHandler("allocation", self.cmd_allocation))
+        self._app.add_handler(CommandHandler("risk_status", self.cmd_risk_status))
+        self._app.add_handler(CommandHandler("health", self.cmd_health))
         self._app.add_handler(CommandHandler("close", self.cmd_close))
         await self._app.initialize()
         await self._app.updater.start_polling()
