@@ -185,6 +185,11 @@ class Engine:
             )
             rejection = None
 
+        # Tag the order with the originating strategy so the (shared) exchange can
+        # hold independent positions per strategy on one symbol (plan B).
+        if order is not None:
+            order.strategy_id = signal.strategy_id
+
         if order is not None:
             decision_id = await self._log_decision(signal, "PLACED", None, regime)
             self._active_decisions[signal.symbol] = (
@@ -208,6 +213,7 @@ class Engine:
                     take_profit=signal.take_profit,
                     stop_loss=signal.stop_loss,
                     current_price=current_price,
+                    strategy_id=signal.strategy_id,
                 )
                 self._arm_trailing(signal, order.quantity, current_price, prot)
         else:

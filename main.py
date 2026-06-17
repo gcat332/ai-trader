@@ -21,8 +21,10 @@ from core.config import Settings
 from core.drift_monitor import DriftDetector
 from core.engine import Engine
 from core.live_controller import LiveEngineController
-from core.strategy_factory import build_strategy
+from core.loop_config import parse_loops
+from core.strategy_factory import build_named_strategy, build_strategy
 from core.trading_loop import run_trading_loop
+from types import SimpleNamespace
 from db.repository import Repository
 from db.schema import init_db
 from exchange.binance import BinanceExchange
@@ -62,12 +64,34 @@ async def run():
         mode = "TESTNET" if settings.binance_testnet else "MAINNET"
         logger.info(f"Starting in LIVE mode ({mode})")
 
-    strategy = build_strategy()
-
     # Symbol/timeframe and loop cadence are env-driven so a go-live rehearsal can
     # run a fast 1m loop without touching prod defaults (1h candle, hourly poll).
     symbol = os.getenv("TRADING_SYMBOL", "BTC/USDT")
     timeframe = os.getenv("TRADING_TIMEFRAME", "1h")
+
+    # Loop specs: LOOPn_* env blocks → N concurrent loops on one shared account
+    # (plan B/C). No LOOPn_* → one legacy loop using STRATEGY_MODE. Each loop gets
+    # its own strategy, timeframe, engine-state file, and strategy_filter so the
+    # shared exchange's positions are attributed to the right loop.
+    loops = parse_loops(os.environ)
+    if loops:
+        loop_specs = [
+            SimpleNamespace(
+                strategy=build_named_strategy(lp.strategy, lp.get),
+                symbol=lp.get("SYMBOL", symbol),
+                timeframe=lp.timeframe,
+                strategy_filter=lp.strategy,
+                state_path=f"db/engine_state_{lp.label}.json",
+            )
+            for lp in loops
+        ]
+        logger.info(f"Multi-loop mode: {[(s.strategy_filter, s.timeframe) for s in loop_specs]}")
+    else:
+        loop_specs = [SimpleNamespace(
+            strategy=build_strategy(), symbol=symbol, timeframe=timeframe,
+            strategy_filter=None,
+            state_path=os.getenv("ENGINE_STATE_PATH", "db/engine_state.json"),
+        )]
 
     drift_detector = DriftDetector(
         win_rate_threshold=float(os.getenv("DRIFT_WIN_RATE_THRESHOLD", "0.40")),
@@ -91,28 +115,28 @@ async def run():
         await init_db(conn)
         repo = Repository(conn)
 
-        engine = Engine(
-            exchange=exchange,
-            strategy=strategy,
-            symbol=symbol,
-            timeframe=timeframe,
-            risk_manager=risk_manager,
-            repo=repo,
-            state_path=os.getenv("ENGINE_STATE_PATH", "db/engine_state.json"),
-        )
-        engine.is_running = True
+        for spec in loop_specs:
+            spec.engine = Engine(
+                exchange=exchange,
+                strategy=spec.strategy,
+                symbol=spec.symbol,
+                timeframe=spec.timeframe,
+                risk_manager=risk_manager,
+                repo=repo,
+                state_path=spec.state_path,
+            )
+            spec.engine.is_running = True
 
         # Startup reconciliation: surface any open position the exchange holds that we
         # have no tracked decision for (e.g. opened before a crash). It will still be
         # protected by its exchange-side OCO, but the outcome won't be attributable.
         try:
-            # Restart recovery: re-register the bot's own trading symbol as an open
+            # Restart recovery: re-register each loop's trading symbol as an open
             # position from its balance (entry price unknown until the next fill).
-            # Pre-existing holdings in other assets are ignored — see
-            # BinanceExchange.get_positions for why.
-            await exchange.seed_open_positions([symbol])
+            symbols = {spec.symbol for spec in loop_specs}
+            await exchange.seed_open_positions(list(symbols))
             open_positions = await exchange.get_positions()
-            tracked = set(engine._active_decisions)
+            tracked = {sym for spec in loop_specs for sym in spec.engine._active_decisions}
             for p in open_positions:
                 if p.symbol not in tracked:
                     logger.warning(
@@ -127,7 +151,11 @@ async def run():
         # Seed the daily-loss circuit breaker so RiskManager has a baseline to
         # measure drawdown against from the very first iteration.
         risk_manager.record_daily_start_balance(daily_start)
-        controller = LiveEngineController(engine=engine, repo=repo, daily_start_balance=daily_start)
+        # Controller reports status for the first loop and pauses/resumes ALL loops.
+        controller = LiveEngineController(
+            engine=loop_specs[0].engine, repo=repo, daily_start_balance=daily_start,
+            extra_engines=[s.engine for s in loop_specs[1:]],
+        )
 
         notifier = None
         if settings.telegram_bot_token and settings.telegram_chat_id:
@@ -157,20 +185,24 @@ async def run():
         # return_exceptions=True so a fatal error in one task does not cancel the other
         # (e.g. the trading loop dying must not take the dashboard API down with it).
         await asyncio.gather(
-            run_trading_loop(
-                exchange=exchange,
-                paper_mode=paper_mode,
-                strategy=strategy,
-                symbol=symbol,
-                timeframe=timeframe,
-                risk_manager=risk_manager,
-                engine=engine,
-                repo=repo,
-                drift_detector=drift_detector,
-                retrainer=retrainer,
-                notifier=notifier,
-                logger=logger,
-            ),
+            *[
+                run_trading_loop(
+                    exchange=exchange,
+                    paper_mode=paper_mode,
+                    strategy=spec.strategy,
+                    symbol=spec.symbol,
+                    timeframe=spec.timeframe,
+                    risk_manager=risk_manager,
+                    engine=spec.engine,
+                    repo=repo,
+                    drift_detector=drift_detector,
+                    retrainer=retrainer,
+                    notifier=notifier,
+                    logger=logger,
+                    strategy_filter=spec.strategy_filter,
+                )
+                for spec in loop_specs
+            ],
             server.serve(),
             return_exceptions=True,
         )

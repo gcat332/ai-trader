@@ -74,3 +74,18 @@ async def test_close_position_returns_false_when_not_found(engine, repo):
     ctrl = LiveEngineController(engine=engine, repo=repo, daily_start_balance=10000.0)
     result = await ctrl.close_position("ETH/USDT")
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_pause_resume_affects_all_engines(engine, repo):
+    # Plan B/C: with two concurrent loops, pausing must halt BOTH engines.
+    second = MagicMock()
+    second.is_running = True
+    ctrl = LiveEngineController(engine=engine, repo=repo, daily_start_balance=10000.0,
+                               extra_engines=[second])
+    await ctrl.pause()
+    assert engine.is_running is False
+    assert second.is_running is False
+    await ctrl.resume()
+    assert engine.is_running is True
+    assert second.is_running is True

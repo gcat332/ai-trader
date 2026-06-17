@@ -4,9 +4,10 @@ from core.models import Position
 from core.live_outcome_tracker import LiveOutcomeTracker
 
 
-def _pos(symbol="BTC/USDT", entry=60000.0, qty=0.01):
+def _pos(symbol="BTC/USDT", entry=60000.0, qty=0.01, strategy_id=""):
     return Position(symbol=symbol, side="LONG", entry_price=entry, quantity=qty,
-                    unrealized_pnl=0.0, take_profit=63000.0, stop_loss=58000.0, mode="SPOT")
+                    unrealized_pnl=0.0, take_profit=63000.0, stop_loss=58000.0,
+                    mode="SPOT", strategy_id=strategy_id)
 
 
 def test_no_close_when_position_persists():
@@ -35,4 +36,18 @@ def test_partial_close_uses_delta_quantity():
     # qty reduced 0.02 -> 0.01 → 0.01 closed
     closed = tracker.detect_closed([_pos(qty=0.01)], current_price=62000.0)
     assert len(closed) == 1
+    assert closed[0].quantity == pytest.approx(0.01, rel=1e-3)
+
+
+def test_attributes_close_per_strategy_same_symbol():
+    """Plan B 3b: two strategies hold the same symbol; closing one must emit a
+    single trade attributed to THAT strategy, leaving the other's untouched."""
+    tracker = LiveOutcomeTracker()
+    ema = _pos(qty=0.01, strategy_id="ema_cross")
+    rsi = _pos(qty=0.02, strategy_id="rsi_macd")
+    tracker.snapshot([ema, rsi])
+    # ema_cross position closes; rsi_macd persists unchanged.
+    closed = tracker.detect_closed([rsi], current_price=63000.0)
+    assert len(closed) == 1
+    assert closed[0].strategy_id == "ema_cross"
     assert closed[0].quantity == pytest.approx(0.01, rel=1e-3)

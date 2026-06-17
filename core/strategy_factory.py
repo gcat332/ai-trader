@@ -1,20 +1,90 @@
 # core/strategy_factory.py
 """Builds the active strategy from STRATEGY_MODE. Extracted from main.py so the
 composition root stays small and the strategy wiring is unit-testable in isolation."""
+import glob
 import os
+import pickle
 
 from strategy.base import BaseStrategy
 from strategy.ml.dummy_model import DummyModel
 from strategy.rsi_macd import RsiMacdStrategy
 
 
+def load_ml_model(models_dir: str = "models"):
+    """Load the newest trained model pickle, or fall back to DummyModel.
+
+    model_id embeds a UTC timestamp, so lexical sort == newest. Any failure
+    (no models dir, unpicklable, missing class) degrades to DummyModel so the
+    bot always boots. Trained offline via analysis/train_from_history.py and
+    online by ml/retrainer.py.
+
+    NOTE: opt-in via USE_ML_MODEL=true. Off by default because the current
+    LogisticRegression model (holdout ~53%, barely above chance on 1h BTC)
+    predicts in a narrow 0.44–0.53 band and, used as a confidence gate, drives
+    rsi_macd to ZERO trades in the real engine — killing the profitable rules.
+    Keep DummyModel live until a model proves itself in the online A/B test."""
+    fallback = DummyModel(confidence=float(os.getenv("ML_CONFIDENCE", "0.75")))
+    pkls = sorted(glob.glob(os.path.join(models_dir, "*.pkl")))
+    if not pkls:
+        return fallback
+    try:
+        with open(pkls[-1], "rb") as f:
+            return pickle.load(f)
+    except Exception:
+        return fallback
+
+
+def build_named_strategy(name: str, get) -> BaseStrategy:
+    """Build one strategy by name, reading params via `get(key, default)` so each
+    concurrent loop configures itself from its own namespaced env (plan B/C).
+    `get` returns strings (like os.getenv). Defaults match the best-fit configs
+    found by the analysis sweeps."""
+    ml = DummyModel(confidence=float(get("ML_CONFIDENCE", "0.75")))
+    sl = float(get("ATR_SL_MULT", "2.0"))
+    tp = float(get("ATR_TP_MULT", "3.0"))
+
+    if name == "ema_cross":
+        from strategy.ema_cross import EmaCrossStrategy
+        return EmaCrossStrategy(ml_model=ml, atr_sl_mult=sl, atr_tp_mult=tp)
+    if name == "rsi_macd":
+        trend_ema = int(get("RSI_MACD_TREND_EMA", "200"))
+        return RsiMacdStrategy(
+            ml_model=ml,
+            rsi_oversold=float(get("RSI_OVERSOLD", "50")),
+            rsi_overbought=float(get("RSI_OVERBOUGHT", "50")),
+            atr_sl_mult=sl, atr_tp_mult=tp,
+            long_only=get("RSI_MACD_LONG_ONLY", "true").lower() == "true",
+            trend_filter_period=trend_ema if trend_ema > 0 else None,
+        )
+    if name == "trend_pullback":
+        from strategy.trend_pullback import TrendPullbackStrategy
+        return TrendPullbackStrategy(ml_model=ml, atr_sl_mult=sl, atr_tp_mult=tp)
+    if name == "liquidation_reversion":
+        from strategy.liquidation_reversion import LiquidationReversionStrategy
+        return LiquidationReversionStrategy(ml_model=ml)
+    raise ValueError(f"Unknown strategy {name!r}. Valid: ema_cross, rsi_macd, "
+                     "trend_pullback, liquidation_reversion")
+
+
 def build_strategy() -> BaseStrategy:
     mode = os.getenv("STRATEGY_MODE", "rule_based")
-    ml_model = DummyModel(confidence=float(os.getenv("ML_CONFIDENCE", "0.75")))
+    if os.getenv("USE_ML_MODEL", "false").lower() == "true":
+        ml_model = load_ml_model(os.getenv("MODELS_DIR", "models"))
+    else:
+        ml_model = DummyModel(confidence=float(os.getenv("ML_CONFIDENCE", "0.75")))
+    # Best-fit 1h params from a real-engine sweep (analysis/validate_params.py):
+    # long-only + EMA200 trend filter + rsi 50/50 was the only profitable config
+    # on 1h (PnL +19.4, win-rate 52.5%, Sharpe 4.7). The symmetric long+short
+    # mean-reversion default (35/65) lost ~-95 — shorting/dip-buying against BTC's
+    # uptrend had no edge. All env-overridable.
     gatekeeper = RsiMacdStrategy(
         ml_model=ml_model,
-        rsi_oversold=float(os.getenv("RSI_OVERSOLD", "35")),
-        rsi_overbought=float(os.getenv("RSI_OVERBOUGHT", "65")),
+        rsi_oversold=float(os.getenv("RSI_OVERSOLD", "50")),
+        rsi_overbought=float(os.getenv("RSI_OVERBOUGHT", "50")),
+        atr_sl_mult=float(os.getenv("ATR_SL_MULT", "2.0")),
+        atr_tp_mult=float(os.getenv("ATR_TP_MULT", "3.0")),
+        long_only=os.getenv("RSI_MACD_LONG_ONLY", "true").lower() == "true",
+        trend_filter_period=int(os.getenv("RSI_MACD_TREND_EMA", "200")),
     )
 
     match mode:
@@ -38,19 +108,17 @@ def build_strategy() -> BaseStrategy:
             )
 
         case "multi":
-            from strategy.bollinger_reversion import BollingerReversionStrategy
             from strategy.ema_cross import EmaCrossStrategy
             from strategy.trend_pullback import TrendPullbackStrategy
             from strategy.liquidation_reversion import LiquidationReversionStrategy
             from strategy.meta_strategy import MetaStrategy
             techniques = {
                 "rsi_macd": gatekeeper,
-                "bollinger_reversion": BollingerReversionStrategy(ml_model=DummyModel(confidence=0.75)),
                 "ema_cross": EmaCrossStrategy(ml_model=DummyModel(confidence=0.75)),
                 "trend_pullback": TrendPullbackStrategy(ml_model=DummyModel(confidence=0.75)),
                 "liquidation_reversion": LiquidationReversionStrategy(ml_model=DummyModel(confidence=0.75)),
             }
-            return MetaStrategy(techniques, active=os.getenv("DEFAULT_STRATEGY", "rsi_macd"))
+            return MetaStrategy(techniques, active=os.getenv("DEFAULT_STRATEGY", "ema_cross"))
 
         case _:
             raise ValueError(

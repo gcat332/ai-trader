@@ -41,15 +41,15 @@ class BacktestRunner:
         )
 
         for i, candle in enumerate(candles):
-            window = candles[max(0, i - 99): i + 1]
+            window = candles[max(0, i - 249): i + 1]  # 250 candles: enough to warm up EMA200 (trend_pullback)
             await engine.process_candles(window)
 
             _, high, low, close = candle[1], candle[2], candle[3], candle[4]
-            trade = await exchange.tick(self._symbol, high=high, low=low, close=close)
-            if trade is not None and hasattr(trade, "price"):
-                # Reconstruct TradeRecord for outcome tracking
-                pos_log = exchange.get_trade_log()
-                if pos_log:
-                    await engine.record_trade_outcome(pos_log[-1])
+            fills = await exchange.tick(self._symbol, high=high, low=low, close=close)
+            if fills:
+                # tick may close several positions (one per strategy) in one candle;
+                # record each newly-logged TradeRecord for outcome tracking.
+                for trade in exchange.get_trade_log()[-len(fills):]:
+                    await engine.record_trade_outcome(trade)
 
         return exchange.get_trade_log()

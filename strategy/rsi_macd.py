@@ -6,6 +6,7 @@ from strategy.indicators.rsi import compute_rsi
 from strategy.indicators.macd import compute_macd
 from strategy.indicators.adx import compute_adx
 from strategy.indicators.atr import compute_atr
+from strategy.indicators.ema import compute_ema
 from strategy.ml.base_model import MLModel
 from strategy.narrative import build_narrative
 
@@ -31,6 +32,12 @@ class RsiMacdStrategy(BaseStrategy):
         atr_sl_mult: float = 2.0,
         atr_tp_mult: float = 3.0,
         adx_trend_threshold: float = 20.0,
+        # Spot is long-only and BTC trends up over the long run, so shorting
+        # overbought RSI bled money in backtests. long_only drops the SELL branch;
+        # trend_filter_period (e.g. 200) only allows BUYs above a rising EMA so the
+        # strategy buys dips *in an uptrend* instead of catching falling knives.
+        long_only: bool = False,
+        trend_filter_period: int | None = None,
     ):
         self._model = ml_model
         self._rsi_period = rsi_period
@@ -44,6 +51,8 @@ class RsiMacdStrategy(BaseStrategy):
         self._atr_sl_mult = atr_sl_mult
         self._atr_tp_mult = atr_tp_mult
         self._adx_threshold = adx_trend_threshold
+        self._long_only = long_only
+        self._trend_filter_period = trend_filter_period
 
     def _sl_tp(self, entry: float, atr: float, side: str) -> tuple[float, float]:
         """Return (stop_loss, take_profit). Fixed-% when tp_pct/sl_pct set, else ATR-scaled."""
@@ -103,11 +112,21 @@ class RsiMacdStrategy(BaseStrategy):
         macd_bullish = macd_val >= signal_val
         macd_bearish = macd_val <= signal_val
 
+        # Optional EMA trend filter: only buy in an uptrend, only sell in a downtrend.
+        trend_up = trend_down = True
+        if self._trend_filter_period is not None:
+            tema = compute_ema(close, self._trend_filter_period)
+            if tema.isna().iloc[-2:].any():
+                return self._hold(symbol, entry_price)  # trend EMA not warmed up
+            trend_up = entry_price > float(tema.iloc[-1]) >= float(tema.iloc[-2])
+            trend_down = entry_price < float(tema.iloc[-1]) <= float(tema.iloc[-2])
+
         features = pd.Series({
             "rsi": current_rsi,
             "macd": macd_val,
             "macd_signal": signal_val,
             "adx": adx_val,
+            "volume_ratio": vol_ratio,  # trained model uses this feature (analysis/train_from_history.py)
         })
         confidence = self._model.predict(features)
 
@@ -118,7 +137,7 @@ class RsiMacdStrategy(BaseStrategy):
                 adx=adx_val, vol_ratio=vol_ratio, confidence=confidence,
             )
 
-        if current_rsi < self._rsi_oversold and macd_bullish:
+        if current_rsi < self._rsi_oversold and macd_bullish and trend_up:
             narrative = build_narrative(
                 rsi=current_rsi,
                 macd_line=macd_val,
@@ -141,7 +160,7 @@ class RsiMacdStrategy(BaseStrategy):
                 narrative=narrative,
             )
 
-        if current_rsi > self._rsi_overbought and macd_bearish:
+        if not self._long_only and current_rsi > self._rsi_overbought and macd_bearish and trend_down:
             narrative = build_narrative(
                 rsi=current_rsi,
                 macd_line=macd_val,

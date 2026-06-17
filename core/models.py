@@ -27,6 +27,8 @@ class Order:
     price: float | None
     status: Literal["PENDING", "OPEN", "FILLED", "CANCELLED", "FAILED"]
     exchange_order_id: str | None
+    strategy_id: str = ""  # which sub-strategy placed it; tags clientOrderId so 2
+    #                        strategies can share one spot account/symbol (plan B)
 
 
 @dataclass
@@ -39,6 +41,8 @@ class Position:
     take_profit: float | None
     stop_loss: float | None
     mode: Literal["SPOT", "FUTURES"]
+    strategy_id: str = ""  # owning sub-strategy; lets one symbol hold independent
+    #                        per-strategy positions with their own TP/SL (plan B)
 
 
 @dataclass

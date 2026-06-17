@@ -23,9 +23,9 @@ async def test_tick_hits_take_profit(exchange):
     await _open_btc_position(exchange)
     # candle high reaches TP
     closed = await exchange.tick("BTC/USDT", high=64000.0, low=60500.0, close=61000.0)
-    assert closed is not None
-    assert closed.side == "SELL"
-    assert closed.price == pytest.approx(63000.0)
+    assert len(closed) == 1
+    assert closed[0].side == "SELL"
+    assert closed[0].price == pytest.approx(63000.0)
 
 
 @pytest.mark.asyncio
@@ -33,15 +33,15 @@ async def test_tick_hits_stop_loss(exchange):
     await _open_btc_position(exchange)
     # candle low breaches SL
     closed = await exchange.tick("BTC/USDT", high=60500.0, low=57000.0, close=57500.0)
-    assert closed is not None
-    assert closed.price == pytest.approx(58000.0)
+    assert len(closed) == 1
+    assert closed[0].price == pytest.approx(58000.0)
 
 
 @pytest.mark.asyncio
 async def test_tick_no_hit_returns_none(exchange):
     await _open_btc_position(exchange)
     closed = await exchange.tick("BTC/USDT", high=61000.0, low=59500.0, close=60500.0)
-    assert closed is None
+    assert closed == []
 
 
 @pytest.mark.asyncio

@@ -41,17 +41,21 @@ class RiskManager:
             self._last_rejection_reason = "daily_loss_limit"
             return None
 
-        open_symbols = {p.symbol for p in positions}
-        if signal.side == "SELL" and signal.symbol not in open_symbols:
+        # Plan B: two strategies may hold the same symbol concurrently, so re-entry
+        # and correlation are scoped per (symbol, strategy_id). A strategy still can't
+        # double-enter its OWN position; correlation still blocks a DIFFERENT
+        # correlated symbol (e.g. ETH while BTC is open).
+        own_symbols = {p.symbol for p in positions if p.strategy_id == signal.strategy_id}
+        if signal.side == "SELL" and signal.symbol not in own_symbols:
             self._last_rejection_reason = "sell_no_position"
             return None
-        if signal.side == "BUY" and signal.symbol in open_symbols:
+        if signal.side == "BUY" and signal.symbol in own_symbols:
             self._last_rejection_reason = "re_entry"
             return None
 
         _CORRELATED = {"BTC/USDT", "ETH/USDT"}
         if signal.side == "BUY" and signal.symbol in _CORRELATED:
-            if any(p.symbol in _CORRELATED for p in positions):
+            if any(p.symbol in _CORRELATED and p.symbol != signal.symbol for p in positions):
                 self._last_rejection_reason = "correlation_filter"
                 return None
 
@@ -62,9 +66,10 @@ class RiskManager:
             return None
 
         if signal.side == "SELL":
-            # Exit order: sell exactly what is held, not a fresh 5% notional slice.
-            # The position is guaranteed to exist (sell_no_position gate above).
-            pos = next((p for p in positions if p.symbol == signal.symbol), None)
+            # Exit order: sell exactly what THIS strategy holds, not a fresh notional
+            # slice and not another strategy's position (guaranteed to exist above).
+            pos = next((p for p in positions if p.symbol == signal.symbol
+                        and p.strategy_id == signal.strategy_id), None)
             quantity = pos.quantity if pos else 0.0
         else:
             usdt = balance.get("USDT", 0.0)

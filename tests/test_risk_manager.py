@@ -19,11 +19,11 @@ def _buy_signal(confidence: float = 0.8, stop_loss: float | None = 63500.0) -> S
     )
 
 
-def _open_position(symbol: str = "BTC/USDT") -> Position:
+def _open_position(symbol: str = "BTC/USDT", strategy_id: str = "") -> Position:
     return Position(
         symbol=symbol, side="LONG", entry_price=60000.0,
         quantity=0.01, unrealized_pnl=0.0,
-        take_profit=None, stop_loss=None, mode="SPOT",
+        take_profit=None, stop_loss=None, mode="SPOT", strategy_id=strategy_id,
     )
 
 
@@ -106,7 +106,7 @@ def test_sell_with_existing_position_allowed(risk):
         take_profit=63000.0, stop_loss=67000.0, trailing_sl=False,
         confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
     )
-    pos = _open_position("BTC/USDT")
+    pos = _open_position("BTC/USDT", strategy_id="rsi_macd")
     assert risk.evaluate(sell_signal, {"USDT": 10000.0}, [pos]) is not None
 
 
@@ -117,15 +117,25 @@ def test_sell_order_sized_to_held_quantity(risk):
         take_profit=63000.0, stop_loss=67000.0, trailing_sl=False,
         confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
     )
-    pos = _open_position("BTC/USDT")  # quantity=0.01
+    pos = _open_position("BTC/USDT", strategy_id="rsi_macd")  # quantity=0.01
     order = risk.evaluate(sell_signal, {"USDT": 10000.0}, [pos])
     assert order is not None
     assert order.quantity == pytest.approx(0.01)
 
 
 def test_reentry_guard_blocks_duplicate_buy(risk):
-    pos = _open_position("BTC/USDT")
+    # Same strategy already holds the symbol → its own re-entry is blocked.
+    pos = _open_position("BTC/USDT", strategy_id="rsi_macd")
     assert risk.evaluate(_buy_signal(), {"USDT": 10000.0}, [pos]) is None
+
+
+def test_different_strategy_may_buy_same_symbol(risk):
+    # Plan B: another strategy holds BTC; rsi_macd may still open its own BTC
+    # position (independent OCO, attributed by clientOrderId).
+    pos = _open_position("BTC/USDT", strategy_id="ema_cross")
+    order = risk.evaluate(_buy_signal(), {"USDT": 10000.0}, [pos])
+    assert order is not None
+    assert order.symbol == "BTC/USDT"
 
 
 def test_correlation_filter_blocks_eth_when_btc_open(risk):
@@ -170,6 +180,6 @@ def test_rejection_reason_none_on_success(risk):
 
 
 def test_rejection_reason_re_entry(risk):
-    pos = _open_position("BTC/USDT")
+    pos = _open_position("BTC/USDT", strategy_id="rsi_macd")
     risk.evaluate(_buy_signal(), {"USDT": 10000.0}, [pos])
     assert risk.last_rejection_reason == "re_entry"

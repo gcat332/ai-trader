@@ -22,14 +22,18 @@ htmlcov/
 # Database / logs / artifacts
 db/*.db
 db/engine_state.json
+db/engine_state_*.json
 logs/*.log
 backtest_results/
 models/*.pkl
+# cached OHLCV (re-fetch via analysis/fetch_history.py)
+analysis/data/
 
 # OS / editor
 .DS_Store
 .idea/
 .vscode/
+.claude/
 
 # Frontend
 node_modules/

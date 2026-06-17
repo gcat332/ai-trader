@@ -6,16 +6,21 @@ from notifier.engine_controller import EngineController
 
 class LiveEngineController(EngineController):
 
-    def __init__(self, engine, repo, daily_start_balance: float):
+    def __init__(self, engine, repo, daily_start_balance: float, extra_engines=None):
         self._engine = engine
         self._repo = repo
         self._daily_start_balance = daily_start_balance
+        # Plan B/C: extra concurrent-loop engines so pause/resume halt every loop,
+        # not just the primary one the dashboard reports status for.
+        self._engines = [engine, *(extra_engines or [])]
 
     async def pause(self) -> None:
-        self._engine.is_running = False
+        for e in self._engines:
+            e.is_running = False
 
     async def resume(self) -> None:
-        self._engine.is_running = True
+        for e in self._engines:
+            e.is_running = True
 
     async def get_status(self) -> dict:
         positions = await self._engine.exchange.get_positions()

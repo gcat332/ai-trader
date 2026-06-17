@@ -19,7 +19,7 @@ class Exchange(ABC):
     async def protect_position(
         self, symbol: str, side: str, quantity: float,
         take_profit: float | None, stop_loss: float | None,
-        current_price: float = 0.0,
+        current_price: float = 0.0, strategy_id: str = "",
     ) -> Order | None:
         """Register the protective TP/SL for a freshly-opened position.
 

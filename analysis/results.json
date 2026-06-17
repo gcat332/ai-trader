@@ -1,0 +1,342 @@
+{
+  "1d": [
+    {
+      "total_pnl": 110.84808517034807,
+      "win_rate": 1.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 543.9443594693274,
+      "total_trades": 2,
+      "avg_pnl": 55.424042585174035,
+      "sharpe_ratio_by_hold_time": 543.9443594693274,
+      "strategy": "rsi_macd"
+    },
+    {
+      "total_pnl": -154.95489609358285,
+      "win_rate": 0.2222222222222222,
+      "max_drawdown": -154.95489609358285,
+      "sharpe_ratio": -61.4610535694418,
+      "total_trades": 9,
+      "avg_pnl": -17.21721067706476,
+      "sharpe_ratio_by_hold_time": -61.4610535694418,
+      "strategy": "bollinger_reversion"
+    },
+    {
+      "total_pnl": 67.54775552745733,
+      "win_rate": 0.5555555555555556,
+      "max_drawdown": -63.12444662544634,
+      "sharpe_ratio": 20.45008297343558,
+      "total_trades": 9,
+      "avg_pnl": 7.505306169717481,
+      "sharpe_ratio_by_hold_time": 20.45008297343558,
+      "strategy": "ema_cross"
+    },
+    {
+      "total_pnl": 0.0,
+      "win_rate": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "sharpe_ratio_by_hold_time": 0.0,
+      "strategy": "trend_pullback"
+    },
+    {
+      "total_pnl": 0.0,
+      "win_rate": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "sharpe_ratio_by_hold_time": 0.0,
+      "strategy": "liquidation_reversion"
+    },
+    {
+      "total_pnl": 27.997565650609776,
+      "win_rate": 0.5,
+      "max_drawdown": -20.683048120158883,
+      "sharpe_ratio": 26.713163009237274,
+      "total_trades": 2,
+      "avg_pnl": 13.998782825304888,
+      "sharpe_ratio_by_hold_time": 26.713163009237274,
+      "strategy": "multi_mode (rule arbiter)",
+      "final_active_technique": "bollinger_reversion",
+      "regime_profiles": {
+        "rsi_macd/TRENDING": {
+          "wins": 1,
+          "n": 2
+        }
+      }
+    }
+  ],
+  "4h": [
+    {
+      "total_pnl": 66.77438271542275,
+      "win_rate": 0.5714285714285714,
+      "max_drawdown": -37.555671785123025,
+      "sharpe_ratio": 27.427434479112527,
+      "total_trades": 14,
+      "avg_pnl": 4.769598765387339,
+      "sharpe_ratio_by_hold_time": 27.427434479112527,
+      "strategy": "rsi_macd"
+    },
+    {
+      "total_pnl": -328.48744446639114,
+      "win_rate": 0.2717391304347826,
+      "max_drawdown": -328.4874444663911,
+      "sharpe_ratio": -24.03944057062205,
+      "total_trades": 92,
+      "avg_pnl": -3.570515700721643,
+      "sharpe_ratio_by_hold_time": -24.03944057062205,
+      "strategy": "bollinger_reversion"
+    },
+    {
+      "total_pnl": 67.39292939215424,
+      "win_rate": 0.5333333333333333,
+      "max_drawdown": -79.56868347939553,
+      "sharpe_ratio": 10.374966103754815,
+      "total_trades": 45,
+      "avg_pnl": 1.4976206531589833,
+      "sharpe_ratio_by_hold_time": 10.374966103754815,
+      "strategy": "ema_cross"
+    },
+    {
+      "total_pnl": 0.0,
+      "win_rate": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "sharpe_ratio_by_hold_time": 0.0,
+      "strategy": "trend_pullback"
+    },
+    {
+      "total_pnl": 0.0,
+      "win_rate": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "sharpe_ratio_by_hold_time": 0.0,
+      "strategy": "liquidation_reversion"
+    },
+    {
+      "total_pnl": 18.698918195664433,
+      "win_rate": 0.5,
+      "max_drawdown": -20.619471789449733,
+      "sharpe_ratio": 15.173520571556988,
+      "total_trades": 8,
+      "avg_pnl": 2.337364774458054,
+      "sharpe_ratio_by_hold_time": 15.173520571556988,
+      "strategy": "multi_mode (rule arbiter)",
+      "final_active_technique": "trend_pullback",
+      "regime_profiles": {
+        "rsi_macd/TRANSITIONAL": {
+          "wins": 2,
+          "n": 3
+        },
+        "rsi_macd/TRENDING": {
+          "wins": 1,
+          "n": 1
+        },
+        "bollinger_reversion/TRANSITIONAL": {
+          "wins": 1,
+          "n": 1
+        },
+        "bollinger_reversion/TRENDING": {
+          "wins": 0,
+          "n": 1
+        },
+        "ema_cross/TRENDING": {
+          "wins": 0,
+          "n": 1
+        },
+        "ema_cross/TRANSITIONAL": {
+          "wins": 0,
+          "n": 1
+        }
+      }
+    }
+  ],
+  "1h": [
+    {
+      "total_pnl": -90.27484583172175,
+      "win_rate": 0.32075471698113206,
+      "max_drawdown": -90.27484583172176,
+      "sharpe_ratio": -18.33695040370198,
+      "total_trades": 53,
+      "avg_pnl": -1.703298977957014,
+      "sharpe_ratio_by_hold_time": -18.33695040370198,
+      "strategy": "rsi_macd"
+    },
+    {
+      "total_pnl": -818.5794413558721,
+      "win_rate": 0.26865671641791045,
+      "max_drawdown": -818.5794413558717,
+      "sharpe_ratio": -35.67540580099252,
+      "total_trades": 335,
+      "avg_pnl": -2.4435207204652896,
+      "sharpe_ratio_by_hold_time": -35.67540580099252,
+      "strategy": "bollinger_reversion"
+    },
+    {
+      "total_pnl": 202.2730420504485,
+      "win_rate": 0.5679012345679012,
+      "max_drawdown": -49.970866001886776,
+      "sharpe_ratio": 17.82967362104646,
+      "total_trades": 162,
+      "avg_pnl": 1.2485990250027685,
+      "sharpe_ratio_by_hold_time": 17.82967362104646,
+      "strategy": "ema_cross"
+    },
+    {
+      "total_pnl": 0.0,
+      "win_rate": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "sharpe_ratio_by_hold_time": 0.0,
+      "strategy": "trend_pullback"
+    },
+    {
+      "total_pnl": 0.0,
+      "win_rate": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "sharpe_ratio_by_hold_time": 0.0,
+      "strategy": "liquidation_reversion"
+    },
+    {
+      "total_pnl": -21.883781903160283,
+      "win_rate": 0.2857142857142857,
+      "max_drawdown": -32.63782921506934,
+      "sharpe_ratio": -16.758964732432204,
+      "total_trades": 14,
+      "avg_pnl": -1.563127278797163,
+      "sharpe_ratio_by_hold_time": -16.758964732432204,
+      "strategy": "multi_mode (rule arbiter)",
+      "final_active_technique": "ema_cross",
+      "regime_profiles": {
+        "rsi_macd/TRENDING": {
+          "wins": 0,
+          "n": 2
+        },
+        "bollinger_reversion/TRENDING": {
+          "wins": 2,
+          "n": 4
+        },
+        "ema_cross/TRENDING": {
+          "wins": 1,
+          "n": 2
+        },
+        "trend_pullback/TRENDING": {
+          "wins": 0,
+          "n": 2
+        },
+        "liquidation_reversion/TRENDING": {
+          "wins": 0,
+          "n": 1
+        },
+        "rsi_macd/TRANSITIONAL": {
+          "wins": 0,
+          "n": 2
+        },
+        "bollinger_reversion/TRANSITIONAL": {
+          "wins": 1,
+          "n": 1
+        }
+      }
+    }
+  ],
+  "30m": [
+    {
+      "total_pnl": -42.74287125848678,
+      "win_rate": 0.25,
+      "max_drawdown": -42.74287125848678,
+      "sharpe_ratio": -52.1255424448972,
+      "total_trades": 20,
+      "avg_pnl": -2.137143562924339,
+      "sharpe_ratio_by_hold_time": -52.1255424448972,
+      "strategy": "rsi_macd"
+    },
+    {
+      "total_pnl": -147.6011422995526,
+      "win_rate": 0.26666666666666666,
+      "max_drawdown": -153.50435314052518,
+      "sharpe_ratio": -48.518430710805845,
+      "total_trades": 75,
+      "avg_pnl": -1.9680152306607015,
+      "sharpe_ratio_by_hold_time": -48.518430710805845,
+      "strategy": "bollinger_reversion"
+    },
+    {
+      "total_pnl": 19.10206777501115,
+      "win_rate": 0.5531914893617021,
+      "max_drawdown": -17.200583733856917,
+      "sharpe_ratio": 9.756464508884113,
+      "total_trades": 47,
+      "avg_pnl": 0.4064269739364075,
+      "sharpe_ratio_by_hold_time": 9.756464508884113,
+      "strategy": "ema_cross"
+    },
+    {
+      "total_pnl": 0.0,
+      "win_rate": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "sharpe_ratio_by_hold_time": 0.0,
+      "strategy": "trend_pullback"
+    },
+    {
+      "total_pnl": 0.0,
+      "win_rate": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_ratio": 0.0,
+      "total_trades": 0,
+      "sharpe_ratio_by_hold_time": 0.0,
+      "strategy": "liquidation_reversion"
+    },
+    {
+      "total_pnl": -29.22135873612904,
+      "win_rate": 0.25,
+      "max_drawdown": -29.771834992901972,
+      "sharpe_ratio": -43.35802366776644,
+      "total_trades": 16,
+      "avg_pnl": -1.826334921008065,
+      "sharpe_ratio_by_hold_time": -43.35802366776644,
+      "strategy": "multi_mode (rule arbiter)",
+      "final_active_technique": "rsi_macd",
+      "regime_profiles": {
+        "rsi_macd/TRENDING": {
+          "wins": 0,
+          "n": 3
+        },
+        "bollinger_reversion/TRENDING": {
+          "wins": 0,
+          "n": 3
+        },
+        "rsi_macd/TRANSITIONAL": {
+          "wins": 0,
+          "n": 1
+        },
+        "bollinger_reversion/SIDEWAYS": {
+          "wins": 0,
+          "n": 3
+        },
+        "ema_cross/SIDEWAYS": {
+          "wins": 1,
+          "n": 3
+        },
+        "bollinger_reversion/TRANSITIONAL": {
+          "wins": 1,
+          "n": 1
+        },
+        "ema_cross/TRENDING": {
+          "wins": 1,
+          "n": 1
+        },
+        "ema_cross/TRANSITIONAL": {
+          "wins": 1,
+          "n": 1
+        }
+      }
+    }
+  ]
+}

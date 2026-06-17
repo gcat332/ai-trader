@@ -112,7 +112,7 @@ class BinanceExchange(Exchange):
     async def protect_position(
         self, symbol: str, side: str, quantity: float,
         take_profit: float | None, stop_loss: float | None,
-        current_price: float = 0.0,
+        current_price: float = 0.0, strategy_id: str = "",
     ) -> Order | None:
         if stop_loss is None:
             return None
@@ -126,6 +126,7 @@ class BinanceExchange(Exchange):
             price=take_profit if take_profit is not None else stop_loss,
             status="PENDING",
             exchange_order_id=None,
+            strategy_id=strategy_id,  # carried so the OCO fill is attributable (plan B)
         )
         # OCO needs both legs (TP limit + SL stop); with no TP we fall back to a
         # plain stop order so the position is never left without a stop.

@@ -41,6 +41,7 @@ async def run_trading_loop(
     retrainer,
     notifier,
     logger,
+    strategy_filter: str | None = None,
 ) -> None:
     # Single data source. Live: reuse the trading exchange's ccxt client so
     # candle fetches and order/balance calls share ONE connection and rate
@@ -94,7 +95,7 @@ async def run_trading_loop(
                 last_reset_date = today
 
             if engine.is_running:
-                candles = await data_source.fetch_ohlcv(symbol, timeframe, limit=100)
+                candles = await data_source.fetch_ohlcv(symbol, timeframe, limit=250)  # 250: warms up EMA200 (trend_pullback)
                 # Mark-to-market equity = free USDT + value of open positions at the
                 # latest close. We use equity (not free USDT alone) because an open
                 # position's unrealized loss must count toward the daily drawdown —
@@ -113,11 +114,19 @@ async def run_trading_loop(
                 # History have real data — in EVERY strategy mode, not just multi.
                 # A stop/TP fill shrinks the spot balance; detect_closed diffs
                 # snapshots to synthesize the closed TradeRecord.
-                positions_now = await exchange.get_positions()
+                # When two loops share one exchange (plan B/C), each loop only owns
+                # its own strategy's positions — filter so this loop records only its
+                # closes and never consumes the other loop's positions.
+                def _mine(positions):
+                    if strategy_filter is None:
+                        return positions
+                    return [p for p in positions if p.strategy_id == strategy_filter]
+
+                positions_now = _mine(await exchange.get_positions())
                 for trade in outcome_tracker.detect_closed(positions_now, last_close):
                     await engine.record_trade_outcome(trade)  # stamps trade.strategy_id
                     await repo.insert_trade(trade)  # persist to live trade log (Trade History/Compare)
-                outcome_tracker.snapshot(await exchange.get_positions())
+                outcome_tracker.snapshot(_mine(await exchange.get_positions()))
 
                 # Drift check every N candles (configurable via DRIFT_CHECK_INTERVAL env var)
                 drift_tick += 1
