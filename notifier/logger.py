@@ -6,6 +6,21 @@ from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 
 
+_STANDARD_LOG_RECORD_KEYS = set(logging.makeLogRecord({}).__dict__)
+
+
+def _json_safe(value):
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        if isinstance(value, dict):
+            return {str(k): _json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [_json_safe(v) for v in value]
+        return str(value)
+
+
 class _JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload: dict = {
@@ -16,9 +31,11 @@ class _JsonFormatter(logging.Formatter):
         }
         # Attach any extra fields passed via `extra={}`
         for key, val in record.__dict__.items():
-            if key not in logging.LogRecord.__dict__ and not key.startswith("_"):
-                payload[key] = val
-        return json.dumps(payload)
+            if key not in _STANDARD_LOG_RECORD_KEYS and not key.startswith("_"):
+                payload[key] = _json_safe(val)
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False, default=str)
 
 
 def get_logger(name: str, log_file: str, max_bytes: int = 10_485_760, backup_count: int = 7) -> logging.Logger:

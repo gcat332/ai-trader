@@ -56,3 +56,17 @@ Notes for Next Agent: Open order count is repository-derived from PENDING/OPEN
 orders, not a fresh exchange query. Formatter supports future richer order data
 without changing execution logic.
 ---
+---
+Timestamp: 2026-06-18 12:46:46 +0700
+Agent: Codex
+Task: Fix structured logger JSON serialization errors
+Files Modified: notifier/logger.py, tests/test_logger.py, changes.log
+Summary: Made structured logging ignore standard LogRecord internals, serialize
+non-JSON extra values safely, and include formatted exception text when exc_info
+is present. Added regression tests for supervisor-style RuntimeError args and
+non-JSON extra fields.
+Validation: .venv/bin/python -m pytest -q -> 357 passed, 4 skipped.
+Notes for Next Agent: This fixes the Fly shutdown/restart logging error where
+RuntimeError in logger args could trigger "Object of type RuntimeError is not
+JSON serializable".
+---
