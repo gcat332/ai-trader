@@ -73,8 +73,9 @@ class ClaudeStrategy(BaseStrategy):
 
     def validate(self, signal: Signal, ohlcv: pd.DataFrame) -> Signal:
         """Validator for HybridStrategy — Claude confirms or rejects a pre-existing signal."""
+        source_strategy = signal.strategy_id or "unknown_strategy"
         user_prompt = (
-            f"RsiMacdStrategy generated a {signal.side} signal for {signal.symbol} "
+            f"{source_strategy} generated a {signal.side} signal for {signal.symbol} "
             f"with confidence {signal.confidence:.0%}.\n"
             f"Gatekeeper reasoning: {signal.narrative}\n\n"
             "Market data for your review:\n"

@@ -152,6 +152,23 @@ def test_validate_confirm_signal():
     assert enriched.confidence == pytest.approx(0.88)
 
 
+def test_validate_prompt_uses_actual_signal_strategy_id():
+    mock_client = _mock_api_response("HOLD", 0.0)
+    strategy = ClaudeStrategy(client=mock_client)
+    original = Signal(
+        symbol="BTC/USDT", side="BUY", entry_price=65000.0,
+        take_profit=67000.0, stop_loss=63500.0, trailing_sl=False,
+        confidence=0.75, strategy_id="ema_cross", timestamp=datetime.now(timezone.utc),
+        narrative="EMA12 crossed above EMA26",
+    )
+
+    strategy.validate(original, _make_ohlcv())
+
+    prompt = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert "ema_cross generated a BUY signal" in prompt
+    assert "RsiMacdStrategy generated" not in prompt
+
+
 def test_validate_rejects_when_claude_disagrees():
     """validate() returns HOLD when Claude disagrees with the gatekeeper's signal."""
     payload = json.dumps({

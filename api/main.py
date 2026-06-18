@@ -16,6 +16,7 @@ async def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
 
 def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
     app = FastAPI(title="AI Trader API")
+    protected = [Depends(require_api_key)]
     # CORS is opt-in because the API exposes financial data and trading controls.
     origins = [o for o in os.getenv("CORS_ORIGINS", "").split(",") if o]
     if origins:
@@ -26,7 +27,7 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
             allow_headers=["*"],
         )
 
-    @app.get("/api/positions")
+    @app.get("/api/positions", dependencies=protected)
     async def get_positions():
         if exchange is not None:
             positions = await exchange.get_positions()
@@ -43,11 +44,11 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
             ]
         return await repo.get_trade_history()  # fallback: closed trade history
 
-    @app.get("/api/orders")
+    @app.get("/api/orders", dependencies=protected)
     async def get_orders(symbol: str | None = None):
         return await repo.get_orders(symbol=symbol)
 
-    @app.get("/api/pnl")
+    @app.get("/api/pnl", dependencies=protected)
     async def get_pnl():
         trades = await repo.get_trade_history()
         total = sum(t.get("realized_pnl", 0) or 0 for t in trades)
@@ -71,7 +72,7 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
         out["last_decision_at"] = recent[0]["timestamp"] if recent else None
         return out
 
-    @app.get("/api/strategies")
+    @app.get("/api/strategies", dependencies=protected)
     async def get_strategies():
         # Report the real loop-level runtime state. Without a controller
         # (read-only API server) status is genuinely unknown.
@@ -79,12 +80,12 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
             return [{"id": "unknown", "status": "unknown", "active": False}]
         return await controller.get_strategies()
 
-    @app.get("/api/strategies/available")
+    @app.get("/api/strategies/available", dependencies=protected)
     async def get_available_strategies():
         from core.strategy_registry import StrategyRegistry
         return StrategyRegistry().available()
 
-    @app.post("/api/strategies/{strategy_id}/start", dependencies=[Depends(require_api_key)])
+    @app.post("/api/strategies/{strategy_id}/start", dependencies=protected)
     async def start_strategy(strategy_id: str):
         if controller is None:
             raise HTTPException(status_code=503, detail="Engine control not available on this server")
@@ -94,7 +95,7 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc).strip("'")) from None
         return {"id": strategy_id, "status": "running"}
 
-    @app.post("/api/strategies/{strategy_id}/stop", dependencies=[Depends(require_api_key)])
+    @app.post("/api/strategies/{strategy_id}/stop", dependencies=protected)
     async def stop_strategy(strategy_id: str):
         if controller is None:
             raise HTTPException(status_code=503, detail="Engine control not available on this server")
@@ -104,7 +105,7 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc).strip("'")) from None
         return {"id": strategy_id, "status": "stopped"}
 
-    @app.get("/api/trades/history")
+    @app.get("/api/trades/history", dependencies=protected)
     async def get_trade_history(
         symbol: str | None = None,
         strategy_id: str | None = None,
@@ -116,18 +117,18 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
             from_date=from_date, to_date=to_date,
         )
 
-    @app.get("/api/backtest/history")
+    @app.get("/api/backtest/history", dependencies=protected)
     async def get_backtest_history():
         return await repo.get_backtest_history()
 
-    @app.get("/api/backtest/{run_id}")
+    @app.get("/api/backtest/{run_id}", dependencies=protected)
     async def get_backtest_run(run_id: str):
         run = await repo.get_backtest_run(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Backtest run not found")
         return run
 
-    @app.post("/api/backtest/run", dependencies=[Depends(require_api_key)])
+    @app.post("/api/backtest/run", dependencies=protected)
     async def trigger_backtest(body: dict):
         import uuid
         from datetime import datetime, timezone
@@ -197,13 +198,13 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
         await repo.insert_backtest_run(run_id, strategy_id, symbol, from_date, to_date, stats)
         return {"run_id": run_id, "candles": len(candles), **stats}
 
-    @app.get("/api/compare")
+    @app.get("/api/compare", dependencies=protected)
     async def compare(strategy: str, from_date: str | None = None, to_date: str | None = None):
         live = await repo.get_trade_history(strategy_id=strategy, from_date=from_date, to_date=to_date)
         backtest = await repo.get_backtest_history()
         return {"live_trades": live, "backtest_runs": backtest}
 
-    @app.get("/api/decisions")
+    @app.get("/api/decisions", dependencies=protected)
     async def get_decisions(
         symbol: str | None = None,
         limit: int = 50,
@@ -211,12 +212,12 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
         rows = await repo.get_decisions(symbol=symbol, limit=limit)
         return {"decisions": rows}
 
-    @app.get("/api/decisions/metrics")
+    @app.get("/api/decisions/metrics", dependencies=protected)
     async def get_decision_metrics(limit: int = 30):
         metrics = await repo.get_decision_metrics(limit=limit)
         return metrics
 
-    @app.get("/api/health/strategy")
+    @app.get("/api/health/strategy", dependencies=protected)
     async def get_strategy_health():
         metrics = await repo.get_decision_metrics(limit=30)
         from core.drift_monitor import DriftDetector
@@ -229,15 +230,15 @@ def create_app(repo: Repository, exchange=None, controller=None) -> FastAPI:
             "confidence_calibration": calibration,
         }
 
-    @app.get("/api/ab-tests")
+    @app.get("/api/ab-tests", dependencies=protected)
     async def get_ab_tests(limit: int = 20):
         return await repo.get_ab_test_history(limit=limit)
 
-    @app.get("/api/strategy-profiles")
+    @app.get("/api/strategy-profiles", dependencies=protected)
     async def get_strategy_profiles():
         return await repo.get_strategy_profiles()
 
-    @app.get("/api/strategy-switches")
+    @app.get("/api/strategy-switches", dependencies=protected)
     async def get_strategy_switches(limit: int = 50):
         return await repo.get_strategy_switches(limit=limit)
 

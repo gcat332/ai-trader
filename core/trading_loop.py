@@ -51,6 +51,7 @@ async def run_trading_loop(
     notifier,
     logger,
     strategy_filter: str | None = None,
+    arbiter_mode: str = "rule",
 ) -> None:
     # Single data source. Live: reuse the trading exchange's ccxt client so
     # candle fetches and order/balance calls share ONE connection and rate
@@ -66,14 +67,19 @@ async def run_trading_loop(
     # Multi-mode components (only used when strategy is a MetaStrategy)
     outcome_tracker = LiveOutcomeTracker()
     arbiter = None
-    if isinstance(strategy, MetaStrategy):
+    is_meta_runtime = isinstance(strategy, MetaStrategy) or (
+        hasattr(strategy, "set_active") and hasattr(strategy, "strategy_ids")
+    )
+    if is_meta_runtime:
         rule_arbiter = StrategyArbiter(
             strategies=strategy.strategy_ids,
             swap_margin=float(os.getenv("SWAP_MARGIN", "0.10")),
             min_regime_samples=int(os.getenv("MIN_REGIME_SAMPLES", "20")),
             epsilon=float(os.getenv("STRATEGY_EPSILON", "0.10")),
         )
-        if os.getenv("ARBITER_MODE", "rule") == "claude":
+        if arbiter_mode == "none":
+            arbiter = None
+        elif arbiter_mode == "claude":
             from core.claude_arbiter import ClaudeStrategyArbiter
             arbiter = ClaudeStrategyArbiter(
                 strategies=strategy.strategy_ids,
@@ -123,6 +129,12 @@ async def run_trading_loop(
                     # closes and never consumes the other loop's positions.
                     def _mine(positions):
                         if strategy_filter is None:
+                            loop_prefix = getattr(strategy, "loop_id", None)
+                            if loop_prefix:
+                                return [
+                                    p for p in positions
+                                    if p.strategy_id.startswith(f"{loop_prefix}:")
+                                ]
                             return positions
                         return [p for p in positions if p.strategy_id == strategy_filter]
 
@@ -137,7 +149,7 @@ async def run_trading_loop(
 
                     drift_interval = int(os.getenv("DRIFT_CHECK_INTERVAL", "10"))
 
-                    if isinstance(strategy, MetaStrategy):
+                    if is_meta_runtime and arbiter is not None:
                         # Regime-aware arbitration replaces the Phase-9 retrain block
                         # when running in multi mode.
                         if drift_tick % drift_interval == 0:
@@ -157,10 +169,16 @@ async def run_trading_loop(
                                     days=int(os.getenv("SWAP_COOLDOWN_DAYS", "1")),
                                 ):
                                     from core.claude_arbiter import ClaudeStrategyArbiter
+                                    loop_prefix = getattr(strategy, "loop_id", None)
+                                    active = (
+                                        f"{loop_prefix}:{strategy.active}"
+                                        if loop_prefix and not str(strategy.active).startswith(f"{loop_prefix}:")
+                                        else strategy.active
+                                    )
                                     decision = (
-                                        await arbiter.decide(current_regime, strategy.active, profiles)
+                                        await arbiter.decide(current_regime, active, profiles)
                                         if isinstance(arbiter, ClaudeStrategyArbiter)
-                                        else arbiter.decide(current_regime, strategy.active, profiles)
+                                        else arbiter.decide(current_regime, active, profiles)
                                     )
                                     await repo.insert_strategy_switch(decision)
                                     if notifier:

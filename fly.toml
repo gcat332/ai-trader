@@ -24,21 +24,29 @@ primary_region = 'sin'
   WEEKLY_REPORT_ENABLED = 'true'
   SUPERVISOR_RESTART_DELAY_SECONDS = '5'
 
-  # Multi-loop (plan B/C): two best-fit strategies run concurrently on ONE spot
-  # account, positions attributed per strategy. LOOPn_* overrides STRATEGY_MODE.
+  # Legacy single-loop fallback only. LOOPn_* settings override these.
   ARBITER_MODE = 'rule'
-  STRATEGY_MODE = 'multi'
+  STRATEGY_MODE = 'rule_based'
+  USE_ML_MODEL = 'false'
 
-  # LOOP1 — ema_cross 1h, ATR 3/3 (backtest: win-rate 80%, +420 / 2yr)
+  # LOOP1 — hybrid: ema_cross gatekeeper + real Claude validator.
   LOOP1_STRATEGY = 'ema_cross'
+  LOOP1_STRATEGY_MODE = 'hybrid'
+  LOOP1_ARBITER_MODE = 'none'
+  LOOP1_USE_ML_MODEL = 'false'
+  LOOP1_EXIT_ON_OPPOSITE_SIGNAL = 'false'
   LOOP1_TIMEFRAME = '1h'
   LOOP1_MODE = 'LIVE'
   LOOP1_ALLOCATION_PCT = '0.50'
   LOOP1_ATR_SL_MULT = '3.0'
   LOOP1_ATR_TP_MULT = '3.0'
 
-  # LOOP2 — rsi_macd 4h, default mean-reversion (win-rate 57%, +67 / 2yr, Sharpe 27)
+  # LOOP2 — unchanged: fixed rsi_macd rule strategy.
   LOOP2_STRATEGY = 'rsi_macd'
+  LOOP2_STRATEGY_MODE = 'rule_based'
+  LOOP2_ARBITER_MODE = 'none'
+  LOOP2_USE_ML_MODEL = 'false'
+  LOOP2_EXIT_ON_OPPOSITE_SIGNAL = 'true'
   LOOP2_TIMEFRAME = '4h'
   LOOP2_MODE = 'LIVE'
   LOOP2_ALLOCATION_PCT = '0.50'

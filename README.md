@@ -91,6 +91,8 @@ not supported.
 
 The HTTP API is retained for local inspection and automation. See
 [docs/api-spec.md](docs/api-spec.md) for endpoints, auth, and loop-id semantics.
+When `API_KEY` is set, every API route except `GET /api/health` requires
+`X-API-Key`.
 
 ## Testing
 
@@ -107,6 +109,7 @@ allocation, lifecycle, and loop config parsing.
 `Dockerfile` and `fly.toml` run the backend worker via `python main.py`. Keep
 `API_HOST` bound to localhost unless remote backend/admin API access is required;
 when binding off-localhost with LIVE loops, startup requires `API_KEY`.
+Telegram operations are restricted to the configured `TELEGRAM_CHAT_ID`.
 
 ## Storage
 

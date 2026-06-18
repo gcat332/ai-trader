@@ -38,6 +38,24 @@ class AlwaysHoldStrategy(BaseStrategy):
         )
 
 
+class AlwaysSellStrategy(BaseStrategy):
+    def __init__(self, strategy_id: str = "always_sell"):
+        self._strategy_id = strategy_id
+
+    def on_candle(self, symbol: str, ohlcv: DataFrame) -> Signal:
+        return Signal(
+            symbol=symbol,
+            side="SELL",
+            entry_price=65000.0,
+            take_profit=63000.0,
+            stop_loss=66500.0,
+            trailing_sl=False,
+            confidence=0.9,
+            strategy_id=self._strategy_id,
+            timestamp=datetime.now(timezone.utc),
+        )
+
+
 @pytest.fixture
 def paper_exchange():
     return PaperExchange(initial_balance={"USDT": 10000.0})
@@ -131,3 +149,44 @@ async def test_engine_hold_signal_places_no_order(paper_exchange):
 
     positions = await paper_exchange.get_positions()
     assert len(positions) == 0
+
+
+@pytest.mark.asyncio
+async def test_engine_ignores_opposite_sell_when_exit_on_signal_disabled(paper_exchange):
+    await paper_exchange.place_order(
+        Order(
+            id="buy",
+            symbol="BTC/USDT",
+            side="BUY",
+            type="MARKET",
+            quantity=0.01,
+            price=None,
+            status="PENDING",
+            exchange_order_id=None,
+            strategy_id="loop1:ema_cross",
+        ),
+        current_price=60000.0,
+    )
+    engine = Engine(
+        exchange=paper_exchange,
+        strategy=AlwaysSellStrategy(strategy_id="loop1:ema_cross"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=None,
+        exit_on_opposite_signal=False,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+        [1700003600000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    positions = await paper_exchange.get_positions()
+    assert len(positions) == 1
+    assert positions[0].quantity == pytest.approx(0.01)
+    assert positions[0].strategy_id == "loop1:ema_cross"
+    assert exchange_sell_count(paper_exchange) == 0
+
+
+def exchange_sell_count(exchange: PaperExchange) -> int:
+    return sum(1 for order in exchange._orders if order.side == "SELL")

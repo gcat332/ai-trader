@@ -5,8 +5,11 @@ local inspection, automation, and backend-safe integration.
 
 ## Authentication
 
-Set `API_KEY` to require `X-API-Key: <value>` on mutating endpoints. For LIVE
-trading, startup fails if `API_HOST` is not localhost and `API_KEY` is empty.
+Set `API_KEY` to require `X-API-Key: <value>` on every API route except
+`GET /api/health`. For LIVE trading, startup fails if `API_HOST` is not
+localhost and `API_KEY` is empty.
+
+Telegram commands are restricted to the configured `TELEGRAM_CHAT_ID`.
 
 ## Health
 

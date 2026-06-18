@@ -123,6 +123,83 @@ async def test_get_strategy_status_includes_open_order_count(engine, repo):
     status = await ctrl.get_strategy_status("loop1")
 
     assert status["open_order_count"] == 1
+    assert status["strategy_mode"] == "rule_based"
+    assert status["arbiter_mode"] == "none"
+    assert status["active_technique"] == "ema_cross"
+    assert status["exit_on_opposite_signal"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_strategy_status_includes_multi_runtime_fields(engine, repo):
+    from types import SimpleNamespace
+    from core.strategy_manager import StrategyManager
+    from core.strategy_runtime import StrategyRuntimeConfig
+
+    engine.strategy.loop_id = "loop1"
+    engine.strategy.strategy_id = "loop1:multi"
+    engine.strategy.active = "ema_cross"
+    engine.strategy.strategy_ids = ["loop1:ema_cross", "loop1:rsi_macd"]
+    cfg = StrategyRuntimeConfig(
+        loop_id="loop1",
+        label="LOOP1",
+        strategy_name="ema_cross",
+        strategy_instance_id="loop1:multi",
+        symbol="BTC/USDT",
+        timeframe="1h",
+        mode="LIVE",
+        state_path="db/engine_state_LOOP1.json",
+        allocation_pct=0.5,
+        strategy_mode="multi",
+        arbiter_mode="rule",
+        techniques=("ema_cross", "rsi_macd"),
+        default_strategy="ema_cross",
+        exit_on_opposite_signal=False,
+    )
+    manager = StrategyManager([SimpleNamespace(config=cfg, engine=engine)])
+    ctrl = LiveEngineController(engine=engine, repo=repo, daily_start_balance=10000.0, manager=manager)
+
+    status = await ctrl.get_strategy_status("loop1")
+
+    assert status["strategy_mode"] == "multi"
+    assert status["arbiter_mode"] == "rule"
+    assert status["active_technique"] == "ema_cross"
+    assert status["techniques"] == ["loop1:ema_cross", "loop1:rsi_macd"]
+    assert status["exit_on_opposite_signal"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_strategy_pnl_groups_multi_loop_techniques(engine, repo):
+    from types import SimpleNamespace
+    from core.strategy_manager import StrategyManager
+    from core.strategy_runtime import StrategyRuntimeConfig
+
+    engine.strategy.loop_id = "loop1"
+    engine.strategy.strategy_ids = ["loop1:ema_cross", "loop1:rsi_macd"]
+    repo.get_trade_history = AsyncMock(return_value=[
+        {"strategy_id": "loop1:ema_cross", "realized_pnl": 100.0, "exit_time": "2026-06-18"},
+        {"strategy_id": "loop1:rsi_macd", "realized_pnl": -25.0, "exit_time": "2026-06-18"},
+        {"strategy_id": "loop2:rsi_macd", "realized_pnl": 900.0, "exit_time": "2026-06-18"},
+    ])
+    cfg = StrategyRuntimeConfig(
+        loop_id="loop1",
+        label="LOOP1",
+        strategy_name="ema_cross",
+        strategy_instance_id="loop1:multi",
+        symbol="BTC/USDT",
+        timeframe="1h",
+        mode="LIVE",
+        state_path="db/engine_state_LOOP1.json",
+        strategy_mode="multi",
+        arbiter_mode="rule",
+        techniques=("ema_cross", "rsi_macd"),
+        default_strategy="ema_cross",
+    )
+    manager = StrategyManager([SimpleNamespace(config=cfg, engine=engine)])
+    ctrl = LiveEngineController(engine=engine, repo=repo, daily_start_balance=10000.0, manager=manager)
+
+    pnl = await ctrl.get_strategy_pnl("loop1")
+
+    assert pnl["total"] == pytest.approx(75.0)
 
 
 @pytest.mark.asyncio

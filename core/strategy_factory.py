@@ -34,13 +34,71 @@ def load_ml_model(models_dir: str = "models"):
         return fallback
 
 
-def build_named_strategy(name: str, get) -> BaseStrategy:
+def build_named_strategy(name: str, get, ml_model=None) -> BaseStrategy:
     """Build one strategy by name, reading params via `get(key, default)` so each
     concurrent loop configures itself from its own namespaced env (plan B/C).
     `get` returns strings (like os.getenv). Defaults match the best-fit configs
     found by the analysis sweeps."""
     from core.strategy_registry import StrategyRegistry
-    return StrategyRegistry().build(name, get)
+    return StrategyRegistry().build(name, get, ml_model=ml_model)
+
+
+def _model_for_runtime(cfg, get):
+    if cfg.use_ml_model:
+        return load_ml_model(get("MODELS_DIR", "models"))
+    return DummyModel(confidence=float(get("ML_CONFIDENCE", "0.75")))
+
+
+def build_runtime_strategy(cfg, get) -> BaseStrategy:
+    """Build the concrete strategy runtime for one LOOPn config."""
+    from core.strategy_runtime import LoopMetaStrategyAdapter, LoopScopedStrategyAdapter
+
+    if cfg.strategy_mode == "rule_based":
+        return LoopScopedStrategyAdapter(
+            build_named_strategy(cfg.strategy_name, get, ml_model=_model_for_runtime(cfg, get)),
+            cfg.strategy_instance_id,
+        )
+
+    if cfg.strategy_mode == "hybrid":
+        from strategy.hybrid_strategy import HybridStrategy
+        from strategy.ml.claude_strategy import ClaudeStrategy
+        gatekeeper = build_named_strategy(
+            cfg.strategy_name,
+            get,
+            ml_model=_model_for_runtime(cfg, get),
+        )
+        validator = ClaudeStrategy(
+            model=get("CLAUDE_STRATEGY_MODEL", ""),
+            confidence_threshold=float(get("CONFIDENCE_THRESHOLD", "0.60")),
+        )
+        return LoopScopedStrategyAdapter(
+            HybridStrategy(gatekeeper=gatekeeper, validator=validator),
+            cfg.strategy_instance_id,
+        )
+
+    if cfg.strategy_mode == "claude_ai":
+        from strategy.ml.claude_strategy import ClaudeStrategy
+        return LoopScopedStrategyAdapter(
+            ClaudeStrategy(
+                model=get("CLAUDE_STRATEGY_MODEL", ""),
+                confidence_threshold=float(get("CONFIDENCE_THRESHOLD", "0.60")),
+            ),
+            cfg.strategy_instance_id,
+        )
+
+    if cfg.strategy_mode == "multi":
+        from strategy.meta_strategy import MetaStrategy
+        techniques = {
+            name: build_named_strategy(name, get, ml_model=_model_for_runtime(cfg, get))
+            for name in cfg.techniques
+        }
+        active = cfg.default_strategy or cfg.strategy_name
+        return LoopMetaStrategyAdapter(
+            MetaStrategy(techniques, active=active),
+            cfg.loop_id,
+        )
+
+    raise ValueError(f"Unsupported strategy_mode={cfg.strategy_mode!r}")
 
 
 def build_strategy() -> BaseStrategy:

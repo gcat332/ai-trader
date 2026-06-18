@@ -1,5 +1,6 @@
 import os
 import pytest
+from types import SimpleNamespace
 from core.config import Settings
 
 _BINANCE_CRED_VARS = [
@@ -90,6 +91,17 @@ def test_validate_claude_mode_requires_anthropic_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
         Settings().validate(paper_mode=True, strategy_mode="hybrid")
+
+
+def test_validate_loop_hybrid_mode_requires_anthropic_key(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    runtime_configs = [
+        SimpleNamespace(strategy_mode="hybrid", arbiter_mode="none", label="LOOP1"),
+        SimpleNamespace(strategy_mode="rule_based", arbiter_mode="none", label="LOOP2"),
+    ]
+
+    with pytest.raises(ValueError, match="LOOP1"):
+        Settings().validate(paper_mode=True, runtime_configs=runtime_configs)
 
 
 def test_legacy_single_pair_fallback(monkeypatch):

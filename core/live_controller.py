@@ -31,6 +31,25 @@ class LiveEngineController(EngineController):
             return len(orders)
         return sum(1 for order in orders if (order.get("strategy_id") or "") in strategy_ids)
 
+    @staticmethod
+    def _strategy_techniques(strategy) -> list[str]:
+        techniques = getattr(strategy, "strategy_ids", None)
+        if isinstance(techniques, (list, tuple, set)):
+            return [str(s) for s in techniques]
+        return []
+
+    @staticmethod
+    def _active_technique(strategy, fallback: str) -> str:
+        active = getattr(strategy, "active", None)
+        return active if isinstance(active, str) else fallback
+
+    @staticmethod
+    def _runtime_strategy_ids(runtime) -> set[str]:
+        cfg = runtime.config
+        ids = set(LiveEngineController._strategy_techniques(runtime.engine.strategy))
+        ids.update({cfg.strategy_instance_id, cfg.loop_id})
+        return ids
+
     async def pause(self) -> None:
         await self.stop_bot()
 
@@ -99,10 +118,13 @@ class LiveEngineController(EngineController):
     async def get_strategy_pnl(self, loop_id: str) -> dict:
         status = await self.get_strategy_status(loop_id)
         strategy_instance_id = status["strategy_instance_id"]
-        trades = await self._repo.get_trade_history(strategy_id=strategy_instance_id)
+        strategy_ids = set(status.get("strategy_ids") or [strategy_instance_id, loop_id])
+        trades = await self._repo.get_trade_history(
+            strategy_id=strategy_instance_id if len(strategy_ids) <= 2 else None
+        )
         trades = [
             t for t in trades
-            if t.get("strategy_id") in {strategy_instance_id, loop_id}
+            if t.get("strategy_id") in strategy_ids
         ]
         pnl = self._pnl_from_trades(trades)
         pnl.update({
@@ -129,19 +151,21 @@ class LiveEngineController(EngineController):
                 "loop_id": r.config.loop_id,
                 "strategy_name": r.config.strategy_name,
                 "strategy_instance_id": r.config.strategy_instance_id,
+                "strategy_mode": r.config.strategy_mode,
+                "arbiter_mode": r.config.arbiter_mode,
+                "active_technique": self._active_technique(r.engine.strategy, r.config.strategy_name),
+                "techniques": self._strategy_techniques(r.engine.strategy) or None,
+                "exit_on_opposite_signal": r.config.exit_on_opposite_signal,
                 "mode": r.config.mode,
                 "running": r.engine.is_running,
                 "symbol": r.config.symbol,
                 "timeframe": r.config.timeframe,
                 "allocation_pct": r.config.allocation_pct,
-                "open_order_count": await self._open_order_count({
-                    r.config.strategy_instance_id,
-                    r.config.loop_id,
-                }),
+                "open_order_count": await self._open_order_count(self._runtime_strategy_ids(r)),
                 "open_positions": [
                     {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
                     for p in await r.engine.exchange.get_positions()
-                    if getattr(p, "strategy_id", r.config.strategy_instance_id) == r.config.strategy_instance_id
+                    if getattr(p, "strategy_id", r.config.strategy_instance_id) in self._runtime_strategy_ids(r)
                 ],
             }
             for r in self._manager.runtimes()
@@ -156,11 +180,17 @@ class LiveEngineController(EngineController):
                 raise KeyError(f"Unknown loop_id {loop_id!r}. Valid: {valid}") from None
             cfg = runtime.config
             positions = await runtime.engine.exchange.get_positions()
-            strategy_ids = {cfg.strategy_instance_id, cfg.loop_id}
+            strategy_ids = self._runtime_strategy_ids(runtime)
             return {
                 "loop_id": cfg.loop_id,
                 "strategy_name": cfg.strategy_name,
                 "strategy_instance_id": cfg.strategy_instance_id,
+                "strategy_mode": cfg.strategy_mode,
+                "arbiter_mode": cfg.arbiter_mode,
+                "active_technique": self._active_technique(runtime.engine.strategy, cfg.strategy_name),
+                "techniques": self._strategy_techniques(runtime.engine.strategy) or None,
+                "strategy_ids": sorted(strategy_ids),
+                "exit_on_opposite_signal": cfg.exit_on_opposite_signal,
                 "mode": cfg.mode,
                 "running": runtime.engine.is_running,
                 "symbol": cfg.symbol,
@@ -170,7 +200,7 @@ class LiveEngineController(EngineController):
                 "open_positions": [
                     {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
                     for p in positions
-                    if getattr(p, "strategy_id", cfg.strategy_instance_id) == cfg.strategy_instance_id
+                    if getattr(p, "strategy_id", cfg.strategy_instance_id) in strategy_ids
                 ],
             }
         strategies = await self.get_strategies()

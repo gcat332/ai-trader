@@ -7,6 +7,11 @@ from db.repository import Repository
 from api.main import create_app
 
 
+@pytest.fixture(autouse=True)
+def clear_api_auth_env(monkeypatch):
+    monkeypatch.delenv("API_KEY", raising=False)
+
+
 # ── Fix 1: CORS configurable via CORS_ORIGINS env ───────────────────────────
 
 @pytest.mark.asyncio
@@ -201,6 +206,42 @@ async def test_control_endpoint_rejects_without_api_key(monkeypatch):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post("/api/strategies/rsi_macd/stop")
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_read_endpoint_rejects_without_api_key_when_configured(monkeypatch):
+    monkeypatch.setenv("API_KEY", "s3cret")
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/orders")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_read_endpoint_accepts_with_api_key_when_configured(monkeypatch):
+    monkeypatch.setenv("API_KEY", "s3cret")
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/orders", headers={"X-API-Key": "s3cret"})
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_stays_public_when_api_key_configured(monkeypatch):
+    monkeypatch.setenv("API_KEY", "s3cret")
+    async with aiosqlite.connect(":memory:") as conn:
+        await init_db(conn)
+        repo = Repository(conn)
+        app = create_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/health")
+    assert resp.status_code == 200
 
 
 @pytest.mark.asyncio

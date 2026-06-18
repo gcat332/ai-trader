@@ -17,8 +17,8 @@ class StrategyRegistry:
             "liquidation_reversion",
         ]
 
-    def build(self, name: str, get: Getter) -> BaseStrategy:
-        ml = DummyModel(confidence=float(get("ML_CONFIDENCE", "0.75")))
+    def build(self, name: str, get: Getter, ml_model=None) -> BaseStrategy:
+        ml = ml_model or DummyModel(confidence=float(get("ML_CONFIDENCE", "0.75")))
         sl = float(get("ATR_SL_MULT", "2.0"))
         tp = float(get("ATR_TP_MULT", "3.0"))
 

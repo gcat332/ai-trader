@@ -26,6 +26,7 @@ class Engine:
         state_path: str | None = None,
         allocation_manager=None,
         loop_id: str | None = None,
+        exit_on_opposite_signal: bool = True,
     ):
         self.exchange = exchange
         self.strategy = strategy
@@ -36,6 +37,7 @@ class Engine:
         self._ab_tester = ab_tester
         self._allocation_manager = allocation_manager
         self._loop_id = loop_id
+        self._exit_on_opposite_signal = exit_on_opposite_signal
         self.is_running: bool = True
         self._regime_classifier = RegimeClassifier()
         # Maps symbol → (decision_id, confidence, challenger_conf, regime, strategy_id)
@@ -169,6 +171,15 @@ class Engine:
 
         if signal.side == "HOLD":
             await self._log_decision(signal, "HOLD", None, regime)
+            return
+
+        if signal.side == "SELL" and not self._exit_on_opposite_signal:
+            await self._log_decision(
+                signal,
+                "REJECTED",
+                "exit_on_opposite_signal_disabled",
+                regime,
+            )
             return
 
         if self._risk_manager is not None:

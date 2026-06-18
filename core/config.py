@@ -43,8 +43,13 @@ class Settings:
         specific = self.binance_testnet_api_secret if self.binance_testnet else self.binance_mainnet_api_secret
         return specific or os.getenv("BINANCE_API_SECRET", "")
 
-    def validate(self, paper_mode: bool, strategy_mode: str = "rule_based",
-                 arbiter_mode: str = "rule") -> None:
+    def validate(
+        self,
+        paper_mode: bool,
+        strategy_mode: str = "rule_based",
+        arbiter_mode: str = "rule",
+        runtime_configs=None,
+    ) -> None:
         """Fail fast at startup if required secrets are missing, instead of crashing
         opaquely on the first signed API call. Paper mode needs no Binance keys."""
         errors: list[str] = []
@@ -55,11 +60,19 @@ class Settings:
                     f"Live trading on {network} requires Binance {network} API key + secret "
                     f"(set BINANCE_{network.upper()}_API_KEY / _SECRET in .env)"
                 )
-        if strategy_mode in ("hybrid", "claude_ai") or arbiter_mode == "claude":
+        needs_anthropic = strategy_mode in ("hybrid", "claude_ai") or arbiter_mode == "claude"
+        anthropic_context = f"STRATEGY_MODE={strategy_mode!r} / ARBITER_MODE={arbiter_mode!r}"
+        for cfg in runtime_configs or []:
+            if cfg.strategy_mode in ("hybrid", "claude_ai") or cfg.arbiter_mode == "claude":
+                needs_anthropic = True
+                anthropic_context += (
+                    f"; {cfg.label}_STRATEGY_MODE={cfg.strategy_mode!r}"
+                    f" / {cfg.label}_ARBITER_MODE={cfg.arbiter_mode!r}"
+                )
+        if needs_anthropic:
             if not os.getenv("ANTHROPIC_API_KEY"):
                 errors.append(
-                    f"ANTHROPIC_API_KEY is required for STRATEGY_MODE={strategy_mode!r}"
-                    f" / ARBITER_MODE={arbiter_mode!r}"
+                    f"ANTHROPIC_API_KEY is required for {anthropic_context}"
                 )
         if errors:
             raise ValueError("Configuration error(s):\n  - " + "\n  - ".join(errors))

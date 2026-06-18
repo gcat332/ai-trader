@@ -25,9 +25,8 @@ from core.engine import Engine
 from core.live_controller import LiveEngineController
 from core.loop_config import parse_loops, parse_runtime_configs
 from core.supervisor import run_supervised
-from core.strategy_factory import build_named_strategy, build_strategy
+from core.strategy_factory import build_runtime_strategy, build_strategy
 from core.strategy_manager import StrategyManager
-from core.strategy_runtime import RuntimeStrategyAdapter
 from core.trading_loop import run_trading_loop
 from types import SimpleNamespace
 from db.repository import Repository
@@ -162,6 +161,7 @@ async def run():
         paper_mode=not live_runtime_configured,
         strategy_mode=os.getenv("STRATEGY_MODE", "rule_based"),
         arbiter_mode=os.getenv("ARBITER_MODE", "rule"),
+        runtime_configs=runtime_configs,
     )
 
     exchange = None
@@ -199,16 +199,13 @@ async def run():
                 ))
                 continue
             lp = loop_by_label[cfg.label]
-            strategy = RuntimeStrategyAdapter(
-                build_named_strategy(cfg.strategy_name, lp.get),
-                cfg.strategy_instance_id,
-            )
+            strategy = build_runtime_strategy(cfg, lp.get)
             loop_specs.append(SimpleNamespace(
                 config=cfg,
                 strategy=strategy,
                 symbol=cfg.symbol,
                 timeframe=cfg.timeframe,
-                strategy_filter=cfg.strategy_instance_id,
+                strategy_filter=None if cfg.strategy_mode == "multi" else cfg.strategy_instance_id,
                 state_path=cfg.state_path,
             ))
         if loops:
@@ -258,6 +255,7 @@ async def run():
                     state_path=spec.state_path,
                     allocation_manager=allocation_manager,
                     loop_id=spec.config.loop_id,
+                    exit_on_opposite_signal=spec.config.exit_on_opposite_signal,
                 )
                 spec.engine.is_running = True
 
@@ -348,6 +346,7 @@ async def run():
                             notifier=notifier,
                             logger=logger,
                             strategy_filter=spec.strategy_filter,
+                            arbiter_mode=spec.config.arbiter_mode,
                         ),
                         logger=logger,
                         notifier=notifier,

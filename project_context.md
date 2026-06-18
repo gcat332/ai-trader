@@ -11,6 +11,13 @@ execution, scheduled Telegram reports, and preserved backtesting.
   contract.
 - Internally each loop maps to `<loop_id>:<strategy>`, for example
   `loop1:ema_cross`.
+- Each loop can now declare `LOOPn_STRATEGY_MODE` independently:
+  `rule_based`, `hybrid`, `claude_ai`, or `multi`.
+- `LOOPn_ARBITER_MODE` is per-loop and only applies to `multi`.
+- `LOOPn_EXIT_ON_OPPOSITE_SIGNAL=false` disables early SELL-signal exits for
+  that loop so positions close only by TP/SL.
+- Current go-live rollout config keeps `loop2` as rule-based `rsi_macd` and
+  moves `loop1` to hybrid `ema_cross` with Claude validation.
 - Scheduled LIVE loops require `LIVE_TRADING_ENABLED=true`.
 - Mixed scheduled LIVE/PAPER loops are blocked until per-loop exchange isolation
   is implemented.

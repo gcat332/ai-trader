@@ -125,6 +125,31 @@ async def test_handle_close_command(mock_controller):
     assert "closed" in call_text.lower() or "BTC" in call_text
 
 
+def _unauthorized_update():
+    update = MagicMock()
+    update.effective_chat.id = 999
+    update.message.reply_text = AsyncMock()
+    return update
+
+
+@pytest.mark.asyncio
+async def test_handle_pause_command_rejects_unauthorized_chat(mock_controller):
+    notifier = TelegramNotifier(token="fake", chat_id="123", controller=mock_controller)
+    update = _unauthorized_update()
+    await notifier.cmd_pause(update, None)
+    mock_controller.pause.assert_not_awaited()
+    update.message.reply_text.assert_awaited_once_with("Unauthorized chat.")
+
+
+@pytest.mark.asyncio
+async def test_handle_pnl_command_rejects_unauthorized_chat(mock_controller):
+    notifier = TelegramNotifier(token="fake", chat_id="123", controller=mock_controller)
+    update = _unauthorized_update()
+    await notifier.cmd_pnl(update, None)
+    mock_controller.get_pnl.assert_not_awaited()
+    update.message.reply_text.assert_awaited_once_with("Unauthorized chat.")
+
+
 def test_format_buy_signal_includes_narrative():
     signal = Signal(
         symbol="BTC/USDT", side="BUY", entry_price=65230.0,

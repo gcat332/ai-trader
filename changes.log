@@ -84,3 +84,77 @@ Notes for Next Agent: This targets ccxt/aiohttp "requires to release all
 resources with .close()" warnings during Fly rolling restarts. It does not alter
 signal, risk, sizing, or order decision logic.
 ---
+---
+Timestamp: 2026-06-18 13:58:08 +0700
+Agent: Codex
+Task: Update per-loop strategy mode implementation plan
+Files Modified: docs/superpowers/plans/2026-06-18-per-loop-strategy-mode.md, changes.log
+Summary: Expanded the plan to include per-loop exit policy via
+LOOPn_EXIT_ON_OPPOSITE_SIGNAL, Claude hybrid prompt source-strategy correction,
+and the requested rollout config where loop1 runs hybrid ema_cross with real
+Claude validation while loop2 remains rule_based rsi_macd.
+Validation: Plan-only change; no runtime tests run.
+Notes for Next Agent: Implementing this plan will change live-trading behavior
+only when LOOPn_STRATEGY_MODE or LOOPn_EXIT_ON_OPPOSITE_SIGNAL is explicitly
+configured. Do not commit .env.
+---
+---
+Timestamp: 2026-06-18 18:40:28 +0700
+Agent: Codex
+Task: Implement per-loop strategy modes and exit policy
+Files Modified: core/config.py, core/engine.py, core/live_controller.py,
+core/loop_config.py, core/strategy_factory.py, core/strategy_registry.py,
+core/strategy_runtime.py, core/trading_loop.py, strategy/ml/claude_strategy.py,
+notifier/telegram.py, fly.toml, project_context.md,
+docs/refactor-migration-guide.md, tests/test_claude_strategy.py,
+tests/test_config.py, tests/test_engine.py, tests/test_live_controller.py,
+tests/test_named_strategy_factory.py, tests/test_strategy_runtime.py,
+changes.log
+Summary: Added per-loop LOOPn_STRATEGY_MODE/LOOPn_ARBITER_MODE/
+LOOPn_USE_ML_MODEL/LOOPn_EXIT_ON_OPPOSITE_SIGNAL parsing, runtime strategy
+builder support for rule_based/hybrid/claude_ai/multi, per-loop TP/SL-only exit
+policy in Engine, per-loop arbiter wiring, loop-aware multi strategy identity,
+Claude hybrid prompt source-strategy correction, Telegram/status visibility, and
+go-live config where loop1 runs hybrid ema_cross with Claude validation while
+loop2 remains rule_based rsi_macd. Updated local .env without printing secrets;
+do not commit .env.
+Validation: API_KEY= .venv/bin/python -m pytest -q -> 383 passed, 4 skipped.
+fly config validate -> configuration is valid.
+Notes for Next Agent: Baseline pytest without clearing API_KEY may fail API tests
+with 401 if local API_KEY is set. Use API_KEY= for local test runs unless tests
+are updated to isolate API auth.
+---
+---
+Timestamp: 2026-06-18 18:22:00 +0700
+Agent: Codex
+Task: Harden remote API reads and Telegram command authorization
+Files Modified: .env.example, README.md, api/main.py, docs/api-spec.md, notifier/telegram.py, tests/test_api.py, tests/test_telegram.py, changes.log
+Summary: Required X-API-Key on every FastAPI route except GET /api/health when API_KEY is configured, closing remote read-only data exposure for orders, positions, decisions, and backtests. Restricted Telegram command handlers to the configured TELEGRAM_CHAT_ID so unauthorized chats cannot pause/resume the bot, close positions, or read operational data. Added regression tests and updated operator docs to match the new auth contract.
+Validation: .venv/bin/pytest -q tests/test_api.py tests/test_telegram.py tests/test_telegram_multiloop.py tests/test_go_live_safety.py -> 61 passed, 1 warning.
+Notes for Next Agent: Remaining security follow-up is design-level rather than a failing test: FastAPI still serves default docs/OpenAPI routes if the API is exposed, and API_KEY remains a shared secret unsuitable for browser-embedded admin surfaces. Keep remote access behind fly proxy/private networking or add stronger auth before any public UI returns.
+---
+---
+Timestamp: 2026-06-18 17:52:21 +0700
+Agent: Codex
+Task: Define AI Trader release-safety validation gate
+Files Modified: docs/release-safety-validation-gate.md, changes.log
+Summary: Added a lean QA release-safety gate document that maps Telegram, API,
+scheduler, exchange, and live-trading-adjacent changes to minimum focused
+pytest evidence and when paper-mode or Binance Spot testnet proof is required.
+Also recorded the current tooling gaps that still prevent hard enforcement.
+Validation: .venv/bin/python -m pytest tests/test_api.py tests/test_telegram.py
+tests/test_reports_scheduler.py tests/test_go_live_safety.py
+tests/test_contract_binance_testnet.py -q -> 51 passed, 4 skipped.
+Notes for Next Agent: The current deploy workflow still lacks a blocking test
+job. Exchange-adjacent releases should keep using the opt-in Spot testnet
+contract suite until CI or release tooling enforces it.
+---
+---
+Timestamp: 2026-06-18 18:45:32 +0700
+Agent: Codex
+Task: Implement pull-request release-safety CI gate
+Files Modified: .github/workflows/pull-request-release-safety.yml, docs/release-safety-validation-gate.md, tests/test_release_safety_workflow.py, changes.log
+Summary of Changes: Added a pull-request GitHub Actions workflow that targets PRs to main, creates a repo-local virtualenv, installs dev dependencies, and runs the focused release-safety pytest gate. Added a regression test that asserts the workflow exists and continues to run the agreed CI command, and updated the release-safety policy doc to describe what the PR gate covers versus the paper/testnet evidence that remains manual.
+Validation: .venv/bin/python -m pytest tests/test_release_safety_workflow.py -q -> 2 passed. .venv/bin/python -m pytest tests/test_api.py tests/test_telegram.py tests/test_telegram_multiloop.py tests/test_telegram_health_monitor.py tests/test_reports_scheduler.py tests/test_trading_loop_daily_reset.py tests/test_go_live_safety.py tests/test_live_controller.py tests/test_shutdown_cleanup.py -q -> 83 passed, 1 warning.
+Notes for Next Agent: CAT-15 can now validate whether this PR gate coverage is sufficient as a required merge check. Spot testnet contract coverage is still manual for exchange/order-path changes.
+---

@@ -3,6 +3,7 @@ from core.models import Signal
 from core.strategy_runtime import RuntimeStrategyAdapter
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
+import pytest
 
 
 def test_runtime_configs_normalize_loop_ids_from_existing_loop_env():
@@ -20,6 +21,86 @@ def test_runtime_configs_normalize_loop_ids_from_existing_loop_env():
     assert [c.strategy_name for c in configs] == ["ema_cross", "rsi_macd"]
     assert [c.mode for c in configs] == ["PAPER", "PAPER"]
     assert [c.strategy_instance_id for c in configs] == ["loop1:ema_cross", "loop2:rsi_macd"]
+    assert [c.strategy_mode for c in configs] == ["rule_based", "rule_based"]
+    assert [c.arbiter_mode for c in configs] == ["none", "none"]
+    assert [c.use_ml_model for c in configs] == [False, False]
+    assert [c.exit_on_opposite_signal for c in configs] == [True, True]
+
+
+def test_loop_strategy_mode_defaults_to_rule_based():
+    configs = parse_runtime_configs({
+        "TRADING_SYMBOL": "BTC/USDT",
+        "LOOP1_STRATEGY": "ema_cross",
+    })
+
+    cfg = configs[0]
+
+    assert cfg.strategy_mode == "rule_based"
+    assert cfg.arbiter_mode == "none"
+    assert cfg.use_ml_model is False
+    assert cfg.exit_on_opposite_signal is True
+    assert cfg.strategy_instance_id == "loop1:ema_cross"
+
+
+def test_loop_strategy_mode_multi_parses_per_loop_settings():
+    configs = parse_runtime_configs({
+        "TRADING_SYMBOL": "BTC/USDT",
+        "LOOP1_STRATEGY": "ema_cross",
+        "LOOP1_STRATEGY_MODE": "multi",
+        "LOOP1_ARBITER_MODE": "rule",
+        "LOOP1_USE_ML_MODEL": "true",
+        "LOOP1_STRATEGIES": "ema_cross,rsi_macd",
+    })
+
+    cfg = configs[0]
+
+    assert cfg.strategy_mode == "multi"
+    assert cfg.arbiter_mode == "rule"
+    assert cfg.use_ml_model is True
+    assert cfg.exit_on_opposite_signal is True
+    assert cfg.techniques == ("ema_cross", "rsi_macd")
+    assert cfg.strategy_instance_id == "loop1:multi"
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_instance"),
+    [
+        ("rule_based", "loop1:ema_cross"),
+        ("hybrid", "loop1:hybrid"),
+        ("claude_ai", "loop1:claude_ai"),
+        ("multi", "loop1:multi"),
+    ],
+)
+def test_all_loop_strategy_modes_parse(mode, expected_instance):
+    configs = parse_runtime_configs({
+        "TRADING_SYMBOL": "BTC/USDT",
+        "LOOP1_STRATEGY": "ema_cross",
+        "LOOP1_STRATEGY_MODE": mode,
+        "LOOP1_ARBITER_MODE": "rule" if mode == "multi" else "none",
+    })
+
+    assert configs[0].strategy_mode == mode
+    assert configs[0].strategy_instance_id == expected_instance
+
+
+def test_loop_exit_on_opposite_signal_can_be_disabled():
+    configs = parse_runtime_configs({
+        "TRADING_SYMBOL": "BTC/USDT",
+        "LOOP1_STRATEGY": "ema_cross",
+        "LOOP1_EXIT_ON_OPPOSITE_SIGNAL": "false",
+    })
+
+    assert configs[0].exit_on_opposite_signal is False
+
+
+def test_non_multi_loop_rejects_arbiter_mode():
+    with pytest.raises(ValueError, match="ARBITER_MODE requires .*STRATEGY_MODE=multi"):
+        parse_runtime_configs({
+            "TRADING_SYMBOL": "BTC/USDT",
+            "LOOP1_STRATEGY": "ema_cross",
+            "LOOP1_STRATEGY_MODE": "hybrid",
+            "LOOP1_ARBITER_MODE": "rule",
+        })
 
 
 def test_runtime_config_loop_mode_overrides_global_paper_trading():

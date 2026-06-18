@@ -177,10 +177,20 @@ def format_strategy_list(strategies: list[dict]) -> str:
         alloc_text = f"{alloc:.0%}" if isinstance(alloc, float) else "unset"
         positions = s.get("open_positions") or []
         open_order_count = int(s.get("open_order_count") or len(s.get("open_orders") or []))
+        strategy_mode = s.get("strategy_mode")
+        arbiter_mode = s.get("arbiter_mode")
+        active = s.get("active_technique")
+        techniques = s.get("techniques") or []
         lines.extend([
             "",
             f"{state_icon} {s['loop_id']} / {s['strategy_name']}",
             f"Mode: {s.get('mode', 'unknown')}",
+            *([f"Strategy mode: {strategy_mode}"] if strategy_mode else []),
+            *([f"Arbiter: {arbiter_mode}"] if arbiter_mode else []),
+            *([f"Active: {active}"] if active else []),
+            *([f"Techniques: {', '.join(techniques)}"] if techniques else []),
+            *([f"Signal exit: {'on' if s.get('exit_on_opposite_signal') else 'off'}"]
+              if "exit_on_opposite_signal" in s else []),
             f"State: {state}",
             f"Symbol: {s.get('symbol', 'unknown')}",
             f"Timeframe: {s.get('timeframe', 'unknown')}",
@@ -404,6 +414,8 @@ class TelegramNotifier:
     # ── Command handlers ──────────────────────────────────────────────────
 
     async def cmd_help(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         await update.message.reply_text(
             "Commands:\n"
             "/status\n/pnl\n/strategies\n/strategy_status <loop_id>\n"
@@ -414,6 +426,8 @@ class TelegramNotifier:
         )
 
     async def cmd_status(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         args = getattr(context, "args", []) if context else []
         if args:
             try:
@@ -445,10 +459,14 @@ class TelegramNotifier:
         await update.message.reply_text(text)
 
     async def cmd_strategies(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         strategies = await self._controller.get_strategies()
         await update.message.reply_text(format_strategy_list(strategies))
 
     async def cmd_strategy_status(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         if not context.args:
             await update.message.reply_text("Usage: /strategy_status <loop_id>")
             return
@@ -506,14 +524,20 @@ class TelegramNotifier:
         await update.message.reply_text(f"{loop_id} stopped.")
 
     async def cmd_pause(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         await self._controller.pause()
         await update.message.reply_text("⏸ Bot paused — no new orders will be placed.")
 
     async def cmd_resume(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         await self._controller.resume()
         await update.message.reply_text("▶️ Bot resumed.")
 
     async def cmd_pnl(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         args = getattr(context, "args", []) if context else []
         if args:
             try:
@@ -542,10 +566,14 @@ class TelegramNotifier:
         )
 
     async def cmd_portfolio(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         status = await self._controller.get_status()
         await update.message.reply_text(f"Open positions: {len(status.get('open_positions') or [])}")
 
     async def cmd_open_positions(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         status = await self._controller.get_status()
         positions = status.get("open_positions") or []
         if not positions:
@@ -557,13 +585,19 @@ class TelegramNotifier:
         ))
 
     async def cmd_closed_positions(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         pnl = await self._controller.get_pnl()
         await update.message.reply_text(f"Closed position P&L total: {pnl['total']:,.2f}")
 
     async def cmd_signals(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         await update.message.reply_text("Recent signals are available in strategy reports after migration.")
 
     async def cmd_allocation(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         strategies = await self._controller.get_strategies()
         lines = ["Allocation"]
         for s in strategies:
@@ -575,15 +609,21 @@ class TelegramNotifier:
         await update.message.reply_text("\n".join(lines))
 
     async def cmd_risk_status(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         status = await self._controller.get_risk_status()
         await update.message.reply_text(format_risk_status(status))
 
     async def cmd_health(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         strategies = await self._controller.get_strategies()
         running = sum(1 for s in strategies if s.get("running"))
         await update.message.reply_text(f"Health: ok\nRunning loops: {running}/{len(strategies)}")
 
     async def cmd_close(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
         if not context.args:
             await update.message.reply_text("Usage: /close <symbol>  e.g. /close BTC")
             return
