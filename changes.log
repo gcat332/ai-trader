@@ -42,3 +42,17 @@ Notes for Next Agent: Duplicate daily notifications were caused by per-loop
 trading rollover summaries plus scheduler summaries. Trading loops now only reset
 risk daily state; scheduled daily/weekly reports are scheduler-owned.
 ---
+---
+Timestamp: 2026-06-18 12:39:25 +0700
+Agent: Codex
+Task: Apply Thai-time Telegram notification format improvements
+Files Modified: core/live_controller.py, notifier/telegram.py, tests/test_live_controller.py, tests/test_telegram.py, tests/test_telegram_multiloop.py, changes.log
+Summary: Updated Telegram status, signal, order, and daily report formatting
+with clearer icons, Thai-time timestamps, daily report date headers, and open
+order/open position counts. Added read-only open order counting from repository
+status for aggregate and loop-specific status views.
+Validation: .venv/bin/python -m pytest -q -> 355 passed, 4 skipped.
+Notes for Next Agent: Open order count is repository-derived from PENDING/OPEN
+orders, not a fresh exchange query. Formatter supports future richer order data
+without changing execution logic.
+---

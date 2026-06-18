@@ -16,6 +16,21 @@ class LiveEngineController(EngineController):
         self._manager = manager
         self._risk_manager = risk_manager
 
+    async def _open_orders(self) -> list[dict]:
+        if not hasattr(self._repo, "get_orders"):
+            return []
+        orders = await self._repo.get_orders()
+        return [
+            order for order in orders
+            if str(order.get("status", "")).upper() in {"PENDING", "OPEN"}
+        ]
+
+    async def _open_order_count(self, strategy_ids: set[str] | None = None) -> int:
+        orders = await self._open_orders()
+        if strategy_ids is None:
+            return len(orders)
+        return sum(1 for order in orders if (order.get("strategy_id") or "") in strategy_ids)
+
     async def pause(self) -> None:
         await self.stop_bot()
 
@@ -63,6 +78,7 @@ class LiveEngineController(EngineController):
                 {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
                 for p in positions
             ],
+            "open_order_count": await self._open_order_count(),
         }
 
     async def get_pnl(self) -> dict:
@@ -118,6 +134,15 @@ class LiveEngineController(EngineController):
                 "symbol": r.config.symbol,
                 "timeframe": r.config.timeframe,
                 "allocation_pct": r.config.allocation_pct,
+                "open_order_count": await self._open_order_count({
+                    r.config.strategy_instance_id,
+                    r.config.loop_id,
+                }),
+                "open_positions": [
+                    {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
+                    for p in await r.engine.exchange.get_positions()
+                    if getattr(p, "strategy_id", r.config.strategy_instance_id) == r.config.strategy_instance_id
+                ],
             }
             for r in self._manager.runtimes()
         ]
@@ -131,6 +156,7 @@ class LiveEngineController(EngineController):
                 raise KeyError(f"Unknown loop_id {loop_id!r}. Valid: {valid}") from None
             cfg = runtime.config
             positions = await runtime.engine.exchange.get_positions()
+            strategy_ids = {cfg.strategy_instance_id, cfg.loop_id}
             return {
                 "loop_id": cfg.loop_id,
                 "strategy_name": cfg.strategy_name,
@@ -140,6 +166,7 @@ class LiveEngineController(EngineController):
                 "symbol": cfg.symbol,
                 "timeframe": cfg.timeframe,
                 "allocation_pct": cfg.allocation_pct,
+                "open_order_count": await self._open_order_count(strategy_ids),
                 "open_positions": [
                     {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
                     for p in positions

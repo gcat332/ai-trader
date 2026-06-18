@@ -26,6 +26,11 @@ def repo():
         {"realized_pnl": 100.0},
         {"realized_pnl": -30.0},
     ])
+    r.get_orders = AsyncMock(return_value=[
+        {"status": "OPEN", "strategy_id": "loop1:ema_cross"},
+        {"status": "FILLED", "strategy_id": "loop1:ema_cross"},
+        {"status": "PENDING", "strategy_id": "loop2:rsi_macd"},
+    ])
     return r
 
 
@@ -51,6 +56,7 @@ async def test_get_status(engine, repo):
     assert status["running"] is True
     assert status["strategy_id"] == "rsi_macd"
     assert len(status["open_positions"]) == 1
+    assert status["open_order_count"] == 2
 
 
 @pytest.mark.asyncio
@@ -92,6 +98,31 @@ async def test_get_strategy_pnl_filters_by_loop_strategy_instance(engine, repo):
     assert pnl["daily"] == pytest.approx(100.0)
     assert pnl["total"] == pytest.approx(75.0)
     assert pnl["loop_id"] == "loop1"
+
+
+@pytest.mark.asyncio
+async def test_get_strategy_status_includes_open_order_count(engine, repo):
+    from types import SimpleNamespace
+    from core.strategy_manager import StrategyManager
+    from core.strategy_runtime import StrategyRuntimeConfig
+
+    cfg = StrategyRuntimeConfig(
+        loop_id="loop1",
+        label="LOOP1",
+        strategy_name="ema_cross",
+        strategy_instance_id="loop1:ema_cross",
+        symbol="BTC/USDT",
+        timeframe="1h",
+        mode="LIVE",
+        state_path="db/engine_state_LOOP1.json",
+        allocation_pct=0.5,
+    )
+    manager = StrategyManager([SimpleNamespace(config=cfg, engine=engine)])
+    ctrl = LiveEngineController(engine=engine, repo=repo, daily_start_balance=10000.0, manager=manager)
+
+    status = await ctrl.get_strategy_status("loop1")
+
+    assert status["open_order_count"] == 1
 
 
 @pytest.mark.asyncio

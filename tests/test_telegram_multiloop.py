@@ -18,6 +18,8 @@ def controller():
             "symbol": "BTC/USDT",
             "timeframe": "1h",
             "allocation_pct": 0.4,
+            "open_order_count": 1,
+            "open_positions": [{"symbol": "BTC/USDT", "quantity": 0.01, "unrealized_pnl": 50.0}],
         },
         {
             "loop_id": "loop2",
@@ -28,6 +30,8 @@ def controller():
             "symbol": "BTC/USDT",
             "timeframe": "4h",
             "allocation_pct": 0.6,
+            "open_order_count": 0,
+            "open_positions": [],
         },
     ]
     ctrl.get_strategy_status.return_value = ctrl.get_strategies.return_value[0]
@@ -116,6 +120,8 @@ def test_format_strategy_list_includes_all_required_fields(controller):
     assert "loop1 / ema_cross" in text
     assert "Mode: LIVE" in text
     assert "Allocation: 40%" in text
+    assert "Open orders: 1" in text
+    assert "Open positions: 1" in text
 
 
 @pytest.mark.asyncio
@@ -150,7 +156,10 @@ async def test_cmd_status_without_loop_lists_all_loops(controller):
     await notifier.cmd_status(update, context)
     controller.get_strategies.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
-    assert "Strategies: 1 running / 2 total" in text
+    assert "🟢 Bot Status" in text
+    assert "Running loops: 1/2" in text
+    assert "Open orders: 1" in text
+    assert "Open positions: 1" in text
     assert "loop1 / ema_cross" in text
     assert "loop2 / rsi_macd" in text
 

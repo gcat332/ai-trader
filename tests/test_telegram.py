@@ -151,6 +151,9 @@ def test_format_daily_summary():
         wins=3,
         trades=4,
         balance=10042.25,
+        generated_at=datetime(2026, 6, 18, 5, 20, tzinfo=timezone.utc),
+        open_order_count=2,
+        open_position_count=1,
         trade_rows=[
             {"strategy_id": "loop1:ema_cross", "realized_pnl": 100.0},
             {"strategy_id": "loop1:ema_cross", "realized_pnl": -25.0},
@@ -158,11 +161,14 @@ def test_format_daily_summary():
             {"strategy_id": "loop2:rsi_macd", "realized_pnl": 0.0},
         ],
     )
-    assert text.splitlines()[0] == "Daily Summary"
+    assert text.splitlines()[0] == "📅 Daily Summary · 17 Jun 2026"
+    assert "Generated: 12:20 ICT" in text
     assert "Trades: 4" in text
     assert "PnL: +$125.50" in text
     assert "Win rate: 75% (3/4 trades)" in text
-    assert "Strategies:" in text
+    assert "Open orders: 2" in text
+    assert "Open positions: 1" in text
+    assert "Strategies" in text
     assert "loop1:ema_cross: +$75.00" in text
     assert "loop2:rsi_macd: +$50.50" in text
     assert "Decisions:" not in text

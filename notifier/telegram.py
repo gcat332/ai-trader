@@ -3,10 +3,37 @@ import asyncio
 import contextlib
 import logging
 import os
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from core.models import Order, Signal
 from notifier.engine_controller import EngineController
 
 logger = logging.getLogger("notifier.telegram")
+THAI_TZ = ZoneInfo("Asia/Bangkok")
+
+
+def _as_thai_time(value: datetime | None = None) -> datetime:
+    value = value or datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(THAI_TZ)
+
+
+def _thai_datetime(value: datetime | None = None) -> str:
+    return _as_thai_time(value).strftime("%d %b %Y %H:%M ICT")
+
+
+def _thai_time(value: datetime | None = None) -> str:
+    return _as_thai_time(value).strftime("%H:%M ICT")
+
+
+def _display_date(day: str | None) -> str:
+    if not day:
+        return _as_thai_time().strftime("%d %b %Y")
+    try:
+        return datetime.fromisoformat(day).strftime("%d %b %Y")
+    except ValueError:
+        return day
 
 
 def format_signal_alert(signal: Signal) -> str:
@@ -14,9 +41,11 @@ def format_signal_alert(signal: Signal) -> str:
     tp = f"{signal.take_profit:,.0f}" if signal.take_profit else "—"
     sl = f"{signal.stop_loss:,.0f}" if signal.stop_loss else "—"
     text = (
-        f"{emoji} {signal.side}  {signal.symbol} @ {signal.entry_price:,.0f}\n"
+        f"{emoji} Signal · {signal.strategy_id}\n"
+        f"{_thai_datetime(signal.timestamp)}\n\n"
+        f"{signal.side} {signal.symbol} @ {signal.entry_price:,.0f}\n"
         f"TP: {tp}  |  SL: {sl}\n"
-        f"Confidence: {signal.confidence:.0%}  |  Strategy: {signal.strategy_id}"
+        f"Confidence: {signal.confidence:.0%}"
     )
     if signal.narrative:
         # Add abbreviated narrative (first 2 parts only to keep message short)
@@ -43,9 +72,14 @@ def format_daily_summary(
     trades: int | None = None,
     balance: float | None = None,
     trade_rows: list[dict] | None = None,
+    generated_at: datetime | None = None,
+    open_order_count: int | None = None,
+    open_position_count: int | None = None,
 ) -> str:
     lines = [
-        "Daily Summary",
+        f"📅 Daily Summary · {_display_date(day)}",
+        f"Generated: {_thai_time(generated_at)}",
+        "",
     ]
     if trades is not None:
         lines.append(f"Trades: {trades}")
@@ -54,6 +88,10 @@ def format_daily_summary(
     if trades is not None:
         win_rate = (wins / trades) if trades else 0.0
         lines.append(f"Win rate: {win_rate:.0%} ({wins or 0}/{trades} trades)")
+    if open_order_count is not None:
+        lines.append(f"Open orders: {open_order_count}")
+    if open_position_count is not None:
+        lines.append(f"Open positions: {open_position_count}")
     if trade_rows:
         by_strategy: dict[str, dict[str, float | int]] = {}
         for trade in trade_rows:
@@ -64,7 +102,7 @@ def format_daily_summary(
             row["trades"] = int(row["trades"]) + 1
             if pnl > 0:
                 row["wins"] = int(row["wins"]) + 1
-        lines.append("Strategies:")
+        lines.extend(["", "Strategies"])
         for strategy_id, row in sorted(by_strategy.items()):
             lines.append(f"  • {strategy_id}: {_money(float(row['pnl']))}")
     return "\n".join(lines)
@@ -97,7 +135,9 @@ def format_order_alert(order: Order, entry_price: float, realized_pnl: float) ->
     sign = "+" if realized_pnl >= 0 else ""
     pct = ((order.price - entry_price) / entry_price * 100) if entry_price else 0
     return (
-        f"{emoji} FILLED  {order.symbol} @ {order.price:,.0f}\n"
+        f"{emoji} Order Filled · {order.strategy_id or 'unknown'}\n"
+        f"{_thai_datetime()}\n\n"
+        f"{order.symbol} {order.side} @ {order.price:,.0f}\n"
         f"PnL: {sign}${realized_pnl:.2f} ({sign}{pct:.1f}%)"
     )
 
@@ -130,18 +170,23 @@ def format_strategy_switch(sw) -> str:
 def format_strategy_list(strategies: list[dict]) -> str:
     lines = ["Strategies"]
     for s in strategies:
-        state = "running" if s.get("running") else "stopped"
+        running = bool(s.get("running"))
+        state = "running" if running else "stopped"
+        state_icon = "🟢" if running else "⏸"
         alloc = s.get("allocation_pct")
         alloc_text = f"{alloc:.0%}" if isinstance(alloc, float) else "unset"
         positions = s.get("open_positions") or []
+        open_order_count = int(s.get("open_order_count") or len(s.get("open_orders") or []))
         lines.extend([
             "",
-            f"{s['loop_id']} / {s['strategy_name']}",
+            f"{state_icon} {s['loop_id']} / {s['strategy_name']}",
             f"Mode: {s.get('mode', 'unknown')}",
             f"State: {state}",
             f"Symbol: {s.get('symbol', 'unknown')}",
             f"Timeframe: {s.get('timeframe', 'unknown')}",
             f"Allocation: {alloc_text}",
+            f"Open orders: {open_order_count}",
+            f"Open positions: {len(positions)}",
         ])
         if positions:
             lines.append("Open positions:")
@@ -154,7 +199,17 @@ def format_strategy_list(strategies: list[dict]) -> str:
 
 def format_strategy_status_summary(strategies: list[dict]) -> str:
     running = sum(1 for s in strategies if s.get("running"))
-    return f"Strategies: {running} running / {len(strategies)} total\n\n{format_strategy_list(strategies)}"
+    open_orders = sum(int(s.get("open_order_count") or len(s.get("open_orders") or [])) for s in strategies)
+    open_positions = sum(len(s.get("open_positions") or []) for s in strategies)
+    state_icon = "🟢" if running else "⏸"
+    header = "\n".join([
+        f"{state_icon} Bot Status · {_thai_datetime()}",
+        f"Running loops: {running}/{len(strategies)}",
+        f"Open orders: {open_orders}",
+        f"Open positions: {open_positions}",
+        "",
+    ])
+    return f"{header}{format_strategy_list(strategies)}"
 
 
 def format_pnl_summary(total_pnl: dict, strategy_pnls: list[dict]) -> str:
@@ -311,11 +366,18 @@ class TelegramNotifier:
         total_pnl = sum((t.get("realized_pnl") or 0) for t in trades)
         wins = sum(1 for t in day_trades if (t.get("realized_pnl") or 0) > 0)
         n = len(day_trades)
+        open_order_count = None
+        if hasattr(repo, "get_orders"):
+            orders = await repo.get_orders()
+            open_order_count = sum(
+                1 for order in orders
+                if str(order.get("status", "")).upper() in {"PENDING", "OPEN"}
+            )
 
         text = format_daily_summary(
             total, placed, rejected, hold, breakdown, day=day,
             day_pnl=day_pnl, total_pnl=total_pnl, wins=wins, trades=n,
-            balance=balance, trade_rows=day_trades,
+            balance=balance, trade_rows=day_trades, open_order_count=open_order_count,
         )
         await self.send(text)
 
@@ -368,13 +430,16 @@ class TelegramNotifier:
 
         status = await self._controller.get_status()
         positions = status.get("open_positions", [])
+        open_order_count = int(status.get("open_order_count") or len(status.get("open_orders") or []))
         pos_text = "\n".join(
             f"  • {p['symbol']}  qty={p['quantity']}  unrealised=${p['unrealized_pnl']:.2f}"
             for p in positions
         ) or "  None"
         text = (
-            f"{'🟢 Running' if status['running'] else '⏸ Paused'}\n"
+            f"{'🟢 Running' if status['running'] else '⏸ Paused'} · {_thai_datetime()}\n"
             f"Strategy: {status['strategy_id']}\n"
+            f"Open orders: {open_order_count}\n"
+            f"Open positions: {len(positions)}\n"
             f"Open positions:\n{pos_text}"
         )
         await update.message.reply_text(text)
