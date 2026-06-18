@@ -11,6 +11,7 @@ Usage:
     PAPER_TRADING=true python main.py  # paper trading mode
 """
 import asyncio
+import inspect
 import os
 
 import aiosqlite
@@ -110,6 +111,19 @@ async def _run_notifier_forever(notifier: TelegramNotifier, check_interval: floa
         await notifier.stop()
 
 
+async def _close_if_supported(resource, logger, name: str) -> None:
+    close = getattr(resource, "close", None)
+    if close is None:
+        return
+    try:
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+        logger.info(f"Closed {name}")
+    except Exception as exc:
+        logger.warning(f"Failed to close {name}: {exc}")
+
+
 async def run():
     settings = Settings()
     # makedirs must run before get_logger() — the rotating file handler opens
@@ -150,205 +164,210 @@ async def run():
         arbiter_mode=os.getenv("ARBITER_MODE", "rule"),
     )
 
-    if paper_mode:
-        exchange = PaperExchange(initial_balance={"USDT": 10000.0})
-        logger.info("Starting in PAPER TRADING mode")
-    else:
-        exchange = BinanceExchange(
-            api_key=settings.binance_api_key,
-            api_secret=settings.binance_api_secret,
-            testnet=settings.binance_testnet,
-        )
-        mode = "TESTNET" if settings.binance_testnet else "MAINNET"
-        logger.info(f"Starting in LIVE mode ({mode})")
+    exchange = None
+    try:
+        if paper_mode:
+            exchange = PaperExchange(initial_balance={"USDT": 10000.0})
+            logger.info("Starting in PAPER TRADING mode")
+        else:
+            exchange = BinanceExchange(
+                api_key=settings.binance_api_key,
+                api_secret=settings.binance_api_secret,
+                testnet=settings.binance_testnet,
+            )
+            mode = "TESTNET" if settings.binance_testnet else "MAINNET"
+            logger.info(f"Starting in LIVE mode ({mode})")
 
-    # Loop specs: LOOPn_* env blocks → N concurrent loops on one shared account
-    # (plan B/C). No LOOPn_* → one legacy loop using STRATEGY_MODE. Each loop gets
-    # its own strategy, timeframe, engine-state file, and strategy_filter so the
-    # shared exchange's positions are attributed to the right loop.
-    loop_by_label = {lp.label: lp for lp in loops}
-    loop_specs = []
-    for cfg in runtime_configs:
-        if not _runtime_is_scheduled(cfg):
-            logger.info(f"Skipping {cfg.loop_id} in BACKTEST mode; run backtests through the backtest entrypoint")
-            continue
-        if cfg.loop_id == "legacy":
+        # Loop specs: LOOPn_* env blocks → N concurrent loops on one shared account
+        # (plan B/C). No LOOPn_* → one legacy loop using STRATEGY_MODE. Each loop gets
+        # its own strategy, timeframe, engine-state file, and strategy_filter so the
+        # shared exchange's positions are attributed to the right loop.
+        loop_by_label = {lp.label: lp for lp in loops}
+        loop_specs = []
+        for cfg in runtime_configs:
+            if not _runtime_is_scheduled(cfg):
+                logger.info(f"Skipping {cfg.loop_id} in BACKTEST mode; run backtests through the backtest entrypoint")
+                continue
+            if cfg.loop_id == "legacy":
+                loop_specs.append(SimpleNamespace(
+                    config=cfg,
+                    strategy=build_strategy(),
+                    symbol=cfg.symbol,
+                    timeframe=cfg.timeframe,
+                    strategy_filter=None,
+                    state_path=cfg.state_path,
+                ))
+                continue
+            lp = loop_by_label[cfg.label]
+            strategy = RuntimeStrategyAdapter(
+                build_named_strategy(cfg.strategy_name, lp.get),
+                cfg.strategy_instance_id,
+            )
             loop_specs.append(SimpleNamespace(
                 config=cfg,
-                strategy=build_strategy(),
+                strategy=strategy,
                 symbol=cfg.symbol,
                 timeframe=cfg.timeframe,
-                strategy_filter=None,
+                strategy_filter=cfg.strategy_instance_id,
                 state_path=cfg.state_path,
             ))
-            continue
-        lp = loop_by_label[cfg.label]
-        strategy = RuntimeStrategyAdapter(
-            build_named_strategy(cfg.strategy_name, lp.get),
-            cfg.strategy_instance_id,
+        if loops:
+            logger.info(
+                f"Multi-loop mode: "
+                f"{[(s.config.loop_id, s.config.strategy_name, s.timeframe) for s in loop_specs]}"
+            )
+        if not loop_specs:
+            raise ValueError("No scheduled LIVE/PAPER runtime configs found")
+        allocation_manager = AllocationManager({
+            spec.config.loop_id: spec.config.allocation_pct
+            for spec in loop_specs
+        })
+
+        drift_detector = DriftDetector(
+            win_rate_threshold=float(os.getenv("DRIFT_WIN_RATE_THRESHOLD", "0.40")),
+            calibration_threshold=float(os.getenv("DRIFT_CALIBRATION_THRESHOLD", "0.20")),
+            min_samples=int(os.getenv("DRIFT_MIN_SAMPLES", "30")),
         )
-        loop_specs.append(SimpleNamespace(
-            config=cfg,
-            strategy=strategy,
-            symbol=cfg.symbol,
-            timeframe=cfg.timeframe,
-            strategy_filter=cfg.strategy_instance_id,
-            state_path=cfg.state_path,
-        ))
-    if loops:
-        logger.info(
-            f"Multi-loop mode: "
-            f"{[(s.config.loop_id, s.config.strategy_name, s.timeframe) for s in loop_specs]}"
+        retrainer = ModelRetrainer(
+            min_samples=int(os.getenv("RETRAIN_MIN_SAMPLES", "50")),
+            models_dir=os.getenv("MODELS_DIR", "models"),
         )
-    if not loop_specs:
-        raise ValueError("No scheduled LIVE/PAPER runtime configs found")
-    allocation_manager = AllocationManager({
-        spec.config.loop_id: spec.config.allocation_pct
-        for spec in loop_specs
-    })
 
-    drift_detector = DriftDetector(
-        win_rate_threshold=float(os.getenv("DRIFT_WIN_RATE_THRESHOLD", "0.40")),
-        calibration_threshold=float(os.getenv("DRIFT_CALIBRATION_THRESHOLD", "0.20")),
-        min_samples=int(os.getenv("DRIFT_MIN_SAMPLES", "30")),
-    )
-    retrainer = ModelRetrainer(
-        min_samples=int(os.getenv("RETRAIN_MIN_SAMPLES", "50")),
-        models_dir=os.getenv("MODELS_DIR", "models"),
-    )
+        # ONE shared RiskManager for all engines — enforces portfolio-level limits
+        risk_manager = RiskManager(
+            max_position_pct=float(os.getenv("MAX_POSITION_PCT", "0.05")),
+            max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "5")),
+            daily_loss_limit_pct=float(os.getenv("DAILY_LOSS_LIMIT_PCT", "0.03")),
+            confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.6")),
+            max_drawdown_limit_pct=_optional_float_env("MAX_DRAWDOWN_LIMIT_PCT"),
+            max_exposure_pct=_optional_float_env("MAX_EXPOSURE_PCT"),
+        )
 
-    # ONE shared RiskManager for all engines — enforces portfolio-level limits
-    risk_manager = RiskManager(
-        max_position_pct=float(os.getenv("MAX_POSITION_PCT", "0.05")),
-        max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "5")),
-        daily_loss_limit_pct=float(os.getenv("DAILY_LOSS_LIMIT_PCT", "0.03")),
-        confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.6")),
-        max_drawdown_limit_pct=_optional_float_env("MAX_DRAWDOWN_LIMIT_PCT"),
-        max_exposure_pct=_optional_float_env("MAX_EXPOSURE_PCT"),
-    )
+        async with aiosqlite.connect("db/trades.db") as conn:
+            await init_db(conn)
+            repo = Repository(conn)
 
-    async with aiosqlite.connect("db/trades.db") as conn:
-        await init_db(conn)
-        repo = Repository(conn)
+            for spec in loop_specs:
+                spec.engine = Engine(
+                    exchange=exchange,
+                    strategy=spec.strategy,
+                    symbol=spec.symbol,
+                    timeframe=spec.timeframe,
+                    risk_manager=risk_manager,
+                    repo=repo,
+                    state_path=spec.state_path,
+                    allocation_manager=allocation_manager,
+                    loop_id=spec.config.loop_id,
+                )
+                spec.engine.is_running = True
 
-        for spec in loop_specs:
-            spec.engine = Engine(
-                exchange=exchange,
-                strategy=spec.strategy,
-                symbol=spec.symbol,
-                timeframe=spec.timeframe,
+            # Startup reconciliation: surface any open position the exchange holds that we
+            # have no tracked decision for (e.g. opened before a crash). It will still be
+            # protected by its exchange-side OCO, but the outcome won't be attributable.
+            try:
+                # Restart recovery: re-register each loop's trading symbol as an open
+                # position from its balance (entry price unknown until the next fill).
+                symbols = {spec.symbol for spec in loop_specs}
+                await exchange.seed_open_positions(list(symbols))
+                open_positions = await exchange.get_positions()
+                tracked = {sym for spec in loop_specs for sym in spec.engine._active_decisions}
+                for p in open_positions:
+                    if p.symbol not in tracked:
+                        logger.warning(
+                            f"Reconcile: untracked open position {p.symbol} qty={p.quantity} "
+                            "(no decision record — outcome will not be attributed)"
+                        )
+            except Exception as e:
+                logger.error(f"Startup reconciliation failed: {e}")
+
+            balance = await exchange.get_balance()
+            daily_start = balance.get("USDT", 10000.0)
+            # Seed the daily-loss circuit breaker so RiskManager has a baseline to
+            # measure drawdown against from the very first iteration.
+            risk_manager.record_daily_start_balance(daily_start)
+            manager = StrategyManager(loop_specs)
+            # Controller reports status for the first loop and pauses/resumes ALL loops.
+            controller = LiveEngineController(
+                engine=loop_specs[0].engine, repo=repo, daily_start_balance=daily_start,
+                extra_engines=[s.engine for s in loop_specs[1:]], manager=manager,
                 risk_manager=risk_manager,
-                repo=repo,
-                state_path=spec.state_path,
-                allocation_manager=allocation_manager,
-                loop_id=spec.config.loop_id,
             )
-            spec.engine.is_running = True
 
-        # Startup reconciliation: surface any open position the exchange holds that we
-        # have no tracked decision for (e.g. opened before a crash). It will still be
-        # protected by its exchange-side OCO, but the outcome won't be attributable.
-        try:
-            # Restart recovery: re-register each loop's trading symbol as an open
-            # position from its balance (entry price unknown until the next fill).
-            symbols = {spec.symbol for spec in loop_specs}
-            await exchange.seed_open_positions(list(symbols))
-            open_positions = await exchange.get_positions()
-            tracked = {sym for spec in loop_specs for sym in spec.engine._active_decisions}
-            for p in open_positions:
-                if p.symbol not in tracked:
-                    logger.warning(
-                        f"Reconcile: untracked open position {p.symbol} qty={p.quantity} "
-                        "(no decision record — outcome will not be attributed)"
-                    )
-        except Exception as e:
-            logger.error(f"Startup reconciliation failed: {e}")
+            notifier = None
+            if settings.telegram_bot_token and settings.telegram_chat_id:
+                notifier = TelegramNotifier(
+                    token=settings.telegram_bot_token,
+                    chat_id=settings.telegram_chat_id,
+                    controller=controller,
+                )
+                logger.info("Telegram bot configured")
 
-        balance = await exchange.get_balance()
-        daily_start = balance.get("USDT", 10000.0)
-        # Seed the daily-loss circuit breaker so RiskManager has a baseline to
-        # measure drawdown against from the very first iteration.
-        risk_manager.record_daily_start_balance(daily_start)
-        manager = StrategyManager(loop_specs)
-        # Controller reports status for the first loop and pauses/resumes ALL loops.
-        controller = LiveEngineController(
-            engine=loop_specs[0].engine, repo=repo, daily_start_balance=daily_start,
-            extra_engines=[s.engine for s in loop_specs[1:]], manager=manager,
-            risk_manager=risk_manager,
-        )
+            app = create_app(repo, exchange=exchange, controller=controller)
 
-        notifier = None
-        if settings.telegram_bot_token and settings.telegram_chat_id:
-            notifier = TelegramNotifier(
-                token=settings.telegram_bot_token,
-                chat_id=settings.telegram_chat_id,
-                controller=controller,
-            )
-            logger.info("Telegram bot configured")
-
-        app = create_app(repo, exchange=exchange, controller=controller)
-
-        if api_host not in ("127.0.0.1", "localhost") and not os.getenv("API_KEY"):
-            logger.warning(
-                f"API bound to {api_host} with no API_KEY set — trading controls are "
-                "exposed unauthenticated. Set API_KEY or bind to localhost."
-            )
-        config = uvicorn.Config(app, host=api_host, port=api_port, log_level="warning")
-        server = uvicorn.Server(config)
-        extra_tasks = []
-        supervisor_delay = float(os.getenv("SUPERVISOR_RESTART_DELAY_SECONDS", "5"))
-        if notifier:
-            extra_tasks.append(run_supervised(
-                name="telegram",
-                task_factory=lambda: _run_notifier_forever(notifier),
-                logger=logger,
-                restart_delay=supervisor_delay,
-            ))
-            extra_tasks.append(run_supervised(
-                name="reports",
-                task_factory=lambda: run_report_scheduler(notifier=notifier, repo=repo),
-                logger=logger,
-                notifier=notifier,
-                restart_delay=supervisor_delay,
-            ))
-
-        # Supervisors restart tasks that fail or return unexpectedly, so a single
-        # runtime failure does not take the other runtime surfaces down with it.
-        await asyncio.gather(
-            *[
-                run_supervised(
-                    name=f"trading:{spec.config.loop_id}",
-                    task_factory=lambda spec=spec: run_trading_loop(
-                        exchange=exchange,
-                        paper_mode=paper_mode,
-                        strategy=spec.strategy,
-                        symbol=spec.symbol,
-                        timeframe=spec.timeframe,
-                        risk_manager=risk_manager,
-                        engine=spec.engine,
-                        repo=repo,
-                        drift_detector=drift_detector,
-                        retrainer=retrainer,
-                        notifier=notifier,
-                        logger=logger,
-                        strategy_filter=spec.strategy_filter,
-                    ),
+            if api_host not in ("127.0.0.1", "localhost") and not os.getenv("API_KEY"):
+                logger.warning(
+                    f"API bound to {api_host} with no API_KEY set — trading controls are "
+                    "exposed unauthenticated. Set API_KEY or bind to localhost."
+                )
+            config = uvicorn.Config(app, host=api_host, port=api_port, log_level="warning")
+            server = uvicorn.Server(config)
+            extra_tasks = []
+            supervisor_delay = float(os.getenv("SUPERVISOR_RESTART_DELAY_SECONDS", "5"))
+            if notifier:
+                extra_tasks.append(run_supervised(
+                    name="telegram",
+                    task_factory=lambda: _run_notifier_forever(notifier),
+                    logger=logger,
+                    restart_delay=supervisor_delay,
+                ))
+                extra_tasks.append(run_supervised(
+                    name="reports",
+                    task_factory=lambda: run_report_scheduler(notifier=notifier, repo=repo),
                     logger=logger,
                     notifier=notifier,
                     restart_delay=supervisor_delay,
-                )
-                for spec in loop_specs
-            ],
-            run_supervised(
-                name="api",
-                task_factory=server.serve,
-                logger=logger,
-                notifier=notifier,
-                restart_delay=supervisor_delay,
-            ),
-            *extra_tasks,
-            return_exceptions=True,
-        )
+                ))
+
+            # Supervisors restart tasks that fail or return unexpectedly, so a single
+            # runtime failure does not take the other runtime surfaces down with it.
+            await asyncio.gather(
+                *[
+                    run_supervised(
+                        name=f"trading:{spec.config.loop_id}",
+                        task_factory=lambda spec=spec: run_trading_loop(
+                            exchange=exchange,
+                            paper_mode=paper_mode,
+                            strategy=spec.strategy,
+                            symbol=spec.symbol,
+                            timeframe=spec.timeframe,
+                            risk_manager=risk_manager,
+                            engine=spec.engine,
+                            repo=repo,
+                            drift_detector=drift_detector,
+                            retrainer=retrainer,
+                            notifier=notifier,
+                            logger=logger,
+                            strategy_filter=spec.strategy_filter,
+                        ),
+                        logger=logger,
+                        notifier=notifier,
+                        restart_delay=supervisor_delay,
+                    )
+                    for spec in loop_specs
+                ],
+                run_supervised(
+                    name="api",
+                    task_factory=server.serve,
+                    logger=logger,
+                    notifier=notifier,
+                    restart_delay=supervisor_delay,
+                ),
+                *extra_tasks,
+                return_exceptions=True,
+            )
+    finally:
+        if exchange is not None:
+            await _close_if_supported(exchange, logger, "exchange")
 
 
 if __name__ == "__main__":

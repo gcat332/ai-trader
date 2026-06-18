@@ -70,3 +70,17 @@ Notes for Next Agent: This fixes the Fly shutdown/restart logging error where
 RuntimeError in logger args could trigger "Object of type RuntimeError is not
 JSON serializable".
 ---
+---
+Timestamp: 2026-06-18 12:54:55 +0700
+Agent: Codex
+Task: Gracefully close exchange resources on shutdown
+Files Modified: main.py, core/trading_loop.py, tests/test_shutdown_cleanup.py, changes.log
+Summary: Added shutdown cleanup so main.run closes shared exchanges with a
+close() coroutine when the process exits, and trading loops close paper-mode
+DataFetcher instances on cancellation. Added focused tests for both cleanup
+paths.
+Validation: .venv/bin/python -m pytest -q -> 359 passed, 4 skipped.
+Notes for Next Agent: This targets ccxt/aiohttp "requires to release all
+resources with .close()" warnings during Fly rolling restarts. It does not alter
+signal, risk, sizing, or order decision logic.
+---
