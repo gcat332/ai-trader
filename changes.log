@@ -28,3 +28,17 @@ log format.
 Notes for Next Agent: Read project_context.md first, then changes.log. Treat
 changes.log as append-only. Do not commit .env or local artifacts.
 ---
+---
+Timestamp: 2026-06-18 12:13:11 +0700
+Agent: Codex
+Task: Add Telegram recovery logging and prevent duplicate daily reports
+Files Modified: .gitignore, core/trading_loop.py, notifier/telegram.py, scheduler/reports.py, tests/test_reports_scheduler.py, tests/test_trading_loop_daily_reset.py, tests/test_telegram_health_monitor.py, changes.log
+Summary: Added Telegram connectivity recovery logging after failed retry periods,
+moved daily Telegram summary ownership to scheduler reports only, persisted report
+scheduler state to avoid startup/restart duplicate daily reports, and ignored the
+runtime report scheduler state file.
+Validation: .venv/bin/python -m pytest -q -> 354 passed, 4 skipped.
+Notes for Next Agent: Duplicate daily notifications were caused by per-loop
+trading rollover summaries plus scheduler summaries. Trading loops now only reset
+risk daily state; scheduled daily/weekly reports are scheduler-owned.
+---

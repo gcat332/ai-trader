@@ -1,5 +1,8 @@
 # notifier/telegram.py
+import asyncio
+import contextlib
 import logging
+import os
 from core.models import Order, Signal
 from notifier.engine_controller import EngineController
 
@@ -212,6 +215,32 @@ def format_ab_result(result: "ABTestResult") -> str:
     )
 
 
+class TelegramConnectivityMonitor:
+    def __init__(self, *, probe, logger, interval_seconds: float = 60.0):
+        self._probe = probe
+        self._logger = logger
+        self._interval_seconds = interval_seconds
+        self._unhealthy = False
+
+    async def check_once(self) -> None:
+        try:
+            await self._probe()
+        except Exception as exc:
+            if not self._unhealthy:
+                self._logger.warning("Telegram connectivity check failed; retrying: %s", exc)
+            self._unhealthy = True
+            return
+
+        if self._unhealthy:
+            self._logger.info("Telegram connectivity recovered after retry")
+        self._unhealthy = False
+
+    async def run(self) -> None:
+        while True:
+            await asyncio.sleep(self._interval_seconds)
+            await self.check_once()
+
+
 class TelegramNotifier:
 
     def __init__(self, token: str, chat_id: str, controller: EngineController):
@@ -219,6 +248,8 @@ class TelegramNotifier:
         self._chat_id = chat_id
         self._controller = controller
         self._app = None  # initialized in start()
+        self._health_task = None
+        self._health_monitor = None
 
     def _authorized(self, update) -> bool:
         chat = getattr(update, "effective_chat", None)
@@ -252,9 +283,8 @@ class TelegramNotifier:
     async def send_daily_summary(self, repo, day: str | None = None,
                                  balance: float | None = None) -> None:
         """Pull one day's decisions + closed trades from DB and send a summary to
-        Telegram. `day` is an ISO date (YYYY-MM-DD); defaults to today. The loop
-        passes the day that just ended at UTC-midnight rollover, plus the account
-        balance it already fetched. limit=500 covers a busy day (incl. fast
+        Telegram. `day` is an ISO date (YYYY-MM-DD); defaults to today.
+        limit=500 covers a busy day (incl. fast
         1m-loop rehearsals) without truncation."""
         decisions = await repo.get_decisions(limit=500)
         from datetime import date
@@ -527,8 +557,21 @@ class TelegramNotifier:
         await self._app.initialize()
         await self._app.updater.start_polling()
         await self._app.start()
+        interval = float(os.getenv("TELEGRAM_HEALTH_CHECK_SECONDS", "60"))
+        if interval > 0:
+            self._health_monitor = TelegramConnectivityMonitor(
+                probe=self._app.bot.get_me,
+                logger=logger,
+                interval_seconds=interval,
+            )
+            self._health_task = asyncio.create_task(self._health_monitor.run())
 
     async def stop(self) -> None:
+        if self._health_task:
+            self._health_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._health_task
+            self._health_task = None
         if self._app:
             await self._app.updater.stop()
             await self._app.stop()

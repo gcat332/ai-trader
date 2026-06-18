@@ -23,6 +23,7 @@ htmlcov/
 db/*.db
 db/engine_state.json
 db/engine_state_*.json
+db/report_scheduler_state.json
 logs/*.log
 backtest_results/
 models/*.pkl

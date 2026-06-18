@@ -27,6 +27,15 @@ def _cooldown_elapsed(last_retrain_iso: str, days: int) -> bool:
     return (datetime.now(timezone.utc) - last) >= timedelta(days=days)
 
 
+async def _handle_daily_reset(*, exchange, risk_manager, last_reset_date, today: date | None = None):
+    today = today or date.today()
+    if today == last_reset_date:
+        return last_reset_date
+    bal = await exchange.get_balance()
+    risk_manager.reset_daily(bal.get("USDT", 0.0))
+    return today
+
+
 async def run_trading_loop(
     *,
     exchange,
@@ -80,19 +89,13 @@ async def run_trading_loop(
         # is self-healing and never propagates an exception that would tear down
         # the gathered uvicorn server.
         try:
-            # UTC midnight daily reset — resets daily loss limit
-            today = date.today()
-            if today != last_reset_date:
-                bal = await exchange.get_balance()
-                # Send the digest for the day that just ended (skip on first boot
-                # when there is no prior day). last_reset_date is None only at start.
-                # Reuse the balance we just fetched for the digest's balance line.
-                if last_reset_date is not None and notifier:
-                    await notifier.send_daily_summary(
-                        repo, day=last_reset_date.isoformat(), balance=bal.get("USDT", 0.0)
-                    )
-                risk_manager.reset_daily(bal.get("USDT", 0.0))
-                last_reset_date = today
+            # Daily reset only updates risk baselines. Scheduled reports are owned
+            # by scheduler.reports so multi-loop runtimes do not send duplicates.
+            last_reset_date = await _handle_daily_reset(
+                exchange=exchange,
+                risk_manager=risk_manager,
+                last_reset_date=last_reset_date,
+            )
 
             if engine.is_running:
                 candles = await data_source.fetch_ohlcv(symbol, timeframe, limit=250)  # 250: warms up EMA200 (trend_pullback)

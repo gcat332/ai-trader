@@ -3,7 +3,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from scheduler.reports import run_due_reports, should_run_daily, should_run_weekly
+from scheduler.reports import (
+    ReportSchedulerState,
+    load_report_state,
+    run_due_reports,
+    save_report_state,
+    should_run_daily,
+    should_run_weekly,
+)
 
 
 def test_should_run_daily_once_per_date():
@@ -17,6 +24,24 @@ def test_should_run_weekly_once_per_iso_week():
     week = f"{now.isocalendar().year}-W{now.isocalendar().week:02d}"
     assert should_run_weekly(now, last_week=None) is True
     assert should_run_weekly(now, last_week=week) is False
+
+
+def test_load_report_state_seeds_current_period_when_missing(tmp_path):
+    now = datetime(2026, 6, 17, 0, 5, tzinfo=timezone.utc)
+
+    state = load_report_state(tmp_path / "missing.json", now=now)
+
+    assert state.last_daily == "2026-06-17"
+    assert state.last_weekly == "2026-W25"
+
+
+def test_save_and_load_report_state(tmp_path):
+    path = tmp_path / "reports.json"
+    save_report_state(path, ReportSchedulerState(last_daily="2026-06-16", last_weekly="2026-W24"))
+
+    state = load_report_state(path, now=datetime(2026, 6, 17, tzinfo=timezone.utc))
+
+    assert state == ReportSchedulerState(last_daily="2026-06-16", last_weekly="2026-W24")
 
 
 @pytest.mark.asyncio
