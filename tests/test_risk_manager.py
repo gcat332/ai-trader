@@ -19,6 +19,26 @@ def _buy_signal(confidence: float = 0.8, stop_loss: float | None = 63500.0) -> S
     )
 
 
+def _futures_signal(
+    side: str = "BUY",
+    entry: float = 100.0,
+    stop_loss: float = 95.0,
+    confidence: float = 0.9,
+) -> Signal:
+    take_profit = 110.0 if side == "BUY" else 90.0
+    return Signal(
+        symbol="SOL/USDT",
+        side=side,
+        entry_price=entry,
+        take_profit=take_profit,
+        stop_loss=stop_loss,
+        trailing_sl=False,
+        confidence=confidence,
+        strategy_id="rsi_macd",
+        timestamp=datetime.now(timezone.utc),
+    )
+
+
 def _open_position(symbol: str = "BTC/USDT", strategy_id: str = "") -> Position:
     return Position(
         symbol=symbol, side="LONG", entry_price=60000.0,
@@ -327,6 +347,97 @@ def test_short_liquidation_guard_rejects(risk):
         is None
     )
     assert risk.last_rejection_reason == "liquidation_too_close"
+
+
+def test_long_skipped_when_positive_funding_exceeds_threshold(risk):
+    signal = _futures_signal(side="BUY", entry=100.0, stop_loss=95.0)
+
+    order = risk.evaluate(
+        signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=5,
+        risk_per_trade=0.01,
+        funding_rate=0.0012,
+    )
+
+    assert order is None
+    assert risk.last_rejection_reason == "funding_adverse"
+
+
+def test_short_skipped_when_negative_funding_exceeds_threshold(risk):
+    signal = _futures_signal(side="SELL", entry=100.0, stop_loss=105.0)
+
+    order = risk.evaluate(
+        signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=5,
+        risk_per_trade=0.01,
+        funding_rate=-0.0012,
+    )
+
+    assert order is None
+    assert risk.last_rejection_reason == "funding_adverse"
+
+
+def test_long_allowed_when_funding_negative(risk):
+    signal = _futures_signal(side="BUY", entry=100.0, stop_loss=95.0)
+
+    order = risk.evaluate(
+        signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=5,
+        risk_per_trade=0.01,
+        funding_rate=-0.05,
+    )
+
+    assert order is not None
+
+
+def test_funding_below_threshold_allowed_for_both_sides(risk):
+    long_signal = _futures_signal(side="BUY", entry=100.0, stop_loss=95.0)
+    short_signal = _futures_signal(side="SELL", entry=100.0, stop_loss=105.0)
+
+    long_order = risk.evaluate(
+        long_signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=5,
+        risk_per_trade=0.01,
+        funding_rate=0.0005,
+    )
+    short_order = risk.evaluate(
+        short_signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=5,
+        risk_per_trade=0.01,
+        funding_rate=-0.0005,
+    )
+
+    assert long_order is not None
+    assert short_order is not None
+
+
+def test_spot_ignores_funding(risk):
+    signal = _futures_signal(side="BUY", entry=100.0, stop_loss=95.0)
+
+    order = risk.evaluate(
+        signal,
+        {"USDT": 1000.0},
+        [],
+        market="spot",
+        funding_rate=0.05,
+    )
+
+    assert order is not None
 
 
 def test_margin_cap_binds_quantity(risk):

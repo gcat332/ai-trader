@@ -91,6 +91,8 @@ class RiskManager:
         risk_per_trade=None,
         mmr=MMR_DEFAULT,
         liq_buffer_pct=0.0,
+        funding_rate=0.0,
+        funding_threshold=0.001,
     ) -> Order | None:
         self._last_rejection_reason = None
         if self._global_kill_switch:
@@ -176,6 +178,14 @@ class RiskManager:
                 return None
             if side_ls == "SHORT" and signal.stop_loss >= buffered_liq:
                 self._last_rejection_reason = "liquidation_too_close"
+                return None
+
+            side_pays = (
+                (signal.side == "BUY" and funding_rate > 0)
+                or (signal.side == "SELL" and funding_rate < 0)
+            )
+            if abs(funding_rate) > funding_threshold and side_pays:
+                self._last_rejection_reason = "funding_adverse"
                 return None
 
         usdt = balance.get("USDT", 0.0)
