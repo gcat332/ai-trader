@@ -2,6 +2,7 @@ import asyncio
 import pytest
 from datetime import datetime, timedelta, timezone
 from pandas import DataFrame
+from unittest.mock import AsyncMock
 from core.models import Order, Signal
 from core.engine import Engine
 from exchange.paper import PaperExchange
@@ -470,6 +471,75 @@ async def test_time_stop_lazy_seeds_missing_opened_at_after_restart():
     assert key in engine._opened_at
     assert datetime.now(timezone.utc) - engine._opened_at[key] < timedelta(seconds=5)
     assert exchange.orders == []
+
+
+@pytest.mark.asyncio
+async def test_engine_fetches_funding_and_passes_to_risk():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0012)
+    risk_manager = RiskManager()
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_funding_gate"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=risk_manager,
+        market="futures",
+        leverage=2,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    assert await exchange.get_positions() == []
+    assert exchange.orders == []
+    assert risk_manager.last_rejection_reason == "funding_adverse"
+
+
+@pytest.mark.asyncio
+async def test_engine_calls_liq_buffer_after_open():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
+    exchange.enforce_liquidation_buffer = AsyncMock(return_value="ok")
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_liq_buffer"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=RiskManager(),
+        market="futures",
+        leverage=2,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    exchange.enforce_liquidation_buffer.assert_awaited_once()
+    assert exchange.enforce_liquidation_buffer.await_args.args[0] == "BTC/USDT"
+
+
+@pytest.mark.asyncio
+async def test_spot_engine_does_not_fetch_funding(paper_exchange):
+    paper_exchange.fetch_funding_rate = AsyncMock(return_value=0.0012)
+    paper_exchange.enforce_liquidation_buffer = AsyncMock(return_value="ok")
+    engine = Engine(
+        exchange=paper_exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="spot_no_funding"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=RiskManager(),
+        market="spot",
+        liq_buffer_pct=0.02,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    paper_exchange.fetch_funding_rate.assert_not_awaited()
+    paper_exchange.enforce_liquidation_buffer.assert_not_awaited()
 
 
 def exchange_sell_count(exchange: PaperExchange) -> int:

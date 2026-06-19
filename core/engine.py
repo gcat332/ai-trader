@@ -1,6 +1,7 @@
 # core/engine.py
 import asyncio
 import json
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,9 @@ from exchange.base import Exchange
 from risk.manager import RiskManager
 from strategy.base import BaseStrategy
 from strategy.regime import RegimeClassifier
+
+
+logger = logging.getLogger(__name__)
 
 
 class Engine:
@@ -32,6 +36,8 @@ class Engine:
         risk_per_trade: float | None = None,
         max_hold_hours: float | None = None,
         reentry_cooldown_bars: int = 0,
+        funding_skip_threshold: float = 0.001,
+        liq_buffer_pct: float = 0.0,
     ):
         self.exchange = exchange
         self.strategy = strategy
@@ -48,6 +54,8 @@ class Engine:
         self._risk_per_trade = risk_per_trade
         self._max_hold_hours = max_hold_hours
         self._reentry_cooldown_bars = reentry_cooldown_bars
+        self._funding_skip_threshold = funding_skip_threshold
+        self._liq_buffer_pct = liq_buffer_pct
         self._cooldown: dict[tuple[str, str], int] = {}
         self._opened_at: dict[tuple[str, str], datetime] = {}
         self.is_running: bool = True
@@ -307,6 +315,13 @@ class Engine:
             if self._allocation_manager is not None and self._loop_id is not None:
                 balance = self._allocation_manager.scoped_balance(self._loop_id, balance)
             positions = await self.exchange.get_positions()
+            funding_rate = 0.0
+            if self._market == 'futures':
+                try:
+                    funding_rate = await self.exchange.fetch_funding_rate(self.symbol)
+                except Exception:
+                    funding_rate = 0.0
+
             order = self._risk_manager.evaluate(
                 signal,
                 balance,
@@ -314,6 +329,9 @@ class Engine:
                 market=self._market,
                 leverage=self._leverage,
                 risk_per_trade=self._risk_per_trade,
+                funding_rate=funding_rate,
+                funding_threshold=self._funding_skip_threshold,
+                liq_buffer_pct=self._liq_buffer_pct,
             )
             rejection = self._risk_manager.last_rejection_reason
         else:
@@ -364,6 +382,16 @@ class Engine:
                     strategy_id=signal.strategy_id,
                 )
                 self._arm_trailing(signal, order.quantity, current_price, prot)
+                if self._market == 'futures':
+                    try:
+                        action = await self.exchange.enforce_liquidation_buffer(
+                            self.symbol, current_price=current_price,
+                            buffer_pct=self._liq_buffer_pct, stop_loss=signal.stop_loss,
+                        )
+                        if action in ('margin_added', 'closed'):
+                            logger.warning('liq-buffer guard on %s: %s', self.symbol, action)
+                    except Exception as exc:
+                        logger.warning('liq-buffer guard failed on %s: %s', self.symbol, exc)
         else:
             await self._log_decision(signal, "REJECTED", rejection, regime)
 
