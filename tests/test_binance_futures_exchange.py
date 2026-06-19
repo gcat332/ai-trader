@@ -55,7 +55,7 @@ async def test_exit_is_reduce_only(fx_orders):
 async def test_below_min_notional_rejected_not_opened(fx_orders):
     # 0.00001 * 65000 = 0.65 USDT < 5.0 min -> never sent
     filled = await fx_orders.place_order(_order("BUY", 0.00001), current_price=65000.0)
-    assert filled.status == "REJECTED"
+    assert filled.status == "FAILED"
     assert filled.quantity == 0
     fx_orders._exchange.create_order.assert_not_called()
 
@@ -65,6 +65,20 @@ async def test_reduce_only_no_position_is_benign(fx_orders):
     fx_orders._exchange.create_order = AsyncMock(side_effect=Exception("binance -2022 ReduceOnly Order is rejected"))
     filled = await fx_orders.place_order(_order("SELL", 0.01, reduce_only=True), current_price=65000.0)
     assert filled.status == "FILLED"  # already flat — treat as a no-op success
+
+
+@pytest.mark.asyncio
+async def test_open_error_propagates(fx_orders):
+    fx_orders._exchange.create_order = AsyncMock(side_effect=Exception('binance -2019 Margin is insufficient'))
+    with pytest.raises(Exception):
+        await fx_orders.place_order(_order('BUY', 0.01), current_price=65000.0)
+
+
+@pytest.mark.asyncio
+async def test_reduce_only_non_2022_error_propagates(fx_orders):
+    fx_orders._exchange.create_order = AsyncMock(side_effect=Exception('binance -2019 Margin is insufficient'))
+    with pytest.raises(Exception):
+        await fx_orders.place_order(_order('SELL', 0.01, reduce_only=True), current_price=65000.0)
 
 
 @pytest.mark.asyncio

@@ -109,7 +109,7 @@ class BinanceFuturesExchange(Exchange):
         # Risk-first: a sub-min order would be silently rejected by Binance, leaving an
         # unprotected/half-entered state. Refuse it here instead.
         if not order.reduce_only and ref_px > 0 and amount * ref_px < self._min_notional(order.symbol):
-            filled.status = "REJECTED"
+            filled.status = "FAILED"
             filled.quantity = 0
             return filled
         params = {"positionSide": "BOTH", "newClientOrderId": order.id[:36]}
