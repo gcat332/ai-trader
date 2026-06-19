@@ -259,7 +259,14 @@ def test_futures_short_requires_sl_above_entry(risk):
     )
 
     assert risk.evaluate(sell_signal, {"USDT": 10000.0}, [], market="futures") is None
-    assert risk.last_rejection_reason == "invalid_stop_loss"
+    assert risk.last_rejection_reason == "short_stop_below_entry"
+
+
+def test_futures_long_requires_sl_below_entry(risk):
+    buy_signal = _buy_signal(stop_loss=66000.0)
+
+    assert risk.evaluate(buy_signal, {"USDT": 10000.0}, [], market="futures") is None
+    assert risk.last_rejection_reason == "long_stop_above_entry"
 
 
 def test_risk_per_trade_sizes_off_stop_distance(risk):
@@ -292,7 +299,85 @@ def test_liquidation_guard_rejects_sl_beyond_liq(risk):
         )
         is None
     )
-    assert risk.last_rejection_reason == "liquidation_guard"
+    assert risk.last_rejection_reason == "liquidation_too_close"
+
+
+def test_short_liquidation_guard_rejects(risk):
+    sell_signal = Signal(
+        symbol="BTC/USDT",
+        side="SELL",
+        entry_price=100.0,
+        take_profit=95.0,
+        stop_loss=106.0,
+        trailing_sl=False,
+        confidence=0.9,
+        strategy_id="rsi_macd",
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    assert (
+        risk.evaluate(
+            sell_signal,
+            {"USDT": 10000.0},
+            [],
+            market="futures",
+            leverage=20,
+            risk_per_trade=0.01,
+        )
+        is None
+    )
+    assert risk.last_rejection_reason == "liquidation_too_close"
+
+
+def test_margin_cap_binds_quantity(risk):
+    buy_signal = Signal(
+        symbol="SOL/USDT",
+        side="BUY",
+        entry_price=100.0,
+        take_profit=110.0,
+        stop_loss=99.99,
+        trailing_sl=False,
+        confidence=0.9,
+        strategy_id="rsi_macd",
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    order = risk.evaluate(
+        buy_signal,
+        {"USDT": 10000.0},
+        [],
+        market="futures",
+        leverage=10,
+        risk_per_trade=0.01,
+    )
+
+    assert order is not None
+    assert order.quantity == round((10000.0 * 10) / 100.0, 8)
+
+
+def test_zero_stop_distance_risk_sizing_reports_zero_quantity(risk):
+    buy_signal = Signal(
+        symbol="SOL/USDT",
+        side="BUY",
+        entry_price=100.0,
+        take_profit=110.0,
+        stop_loss=100.0,
+        trailing_sl=False,
+        confidence=0.9,
+        strategy_id="rsi_macd",
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    assert (
+        risk.evaluate(
+            buy_signal,
+            {"USDT": 10000.0},
+            [],
+            risk_per_trade=0.01,
+        )
+        is None
+    )
+    assert risk.last_rejection_reason == "zero_quantity"
 
 
 def test_spot_unchanged_sell_without_position_rejected(risk):

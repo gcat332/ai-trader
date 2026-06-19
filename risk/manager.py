@@ -162,20 +162,20 @@ class RiskManager:
 
         if is_futures and opening:
             if signal.side == "BUY" and signal.stop_loss >= signal.entry_price:
-                self._last_rejection_reason = "invalid_stop_loss"
+                self._last_rejection_reason = "long_stop_above_entry"
                 return None
             if signal.side == "SELL" and signal.stop_loss <= signal.entry_price:
-                self._last_rejection_reason = "invalid_stop_loss"
+                self._last_rejection_reason = "short_stop_below_entry"
                 return None
 
             side_ls = "LONG" if signal.side == "BUY" else "SHORT"
             liq = liquidation_price(side_ls, signal.entry_price, leverage, mmr)
             buffered_liq = liq * (1 - liq_buffer_pct) if side_ls == "LONG" else liq * (1 + liq_buffer_pct)
             if side_ls == "LONG" and signal.stop_loss <= buffered_liq:
-                self._last_rejection_reason = "liquidation_guard"
+                self._last_rejection_reason = "liquidation_too_close"
                 return None
             if side_ls == "SHORT" and signal.stop_loss >= buffered_liq:
-                self._last_rejection_reason = "liquidation_guard"
+                self._last_rejection_reason = "liquidation_too_close"
                 return None
 
         usdt = balance.get("USDT", 0.0)
@@ -185,11 +185,8 @@ class RiskManager:
             quantity = round(own_position.quantity if own_position else 0.0, 8)
         elif risk_per_trade is not None:
             stop_distance = abs(signal.entry_price - signal.stop_loss)
-            if stop_distance <= 0:
-                self._last_rejection_reason = "invalid_stop_loss"
-                return None
-            risk_qty = (usdt * risk_per_trade) / stop_distance
-            margin_qty_cap = (usdt * self._max_position_pct * leverage) / signal.entry_price
+            risk_qty = (usdt * risk_per_trade) / stop_distance if stop_distance > 0 else 0.0
+            margin_qty_cap = (usdt * leverage) / signal.entry_price
             quantity = round(min(risk_qty, margin_qty_cap), 8)
         else:
             scaled_pct = self._max_position_pct * signal.confidence
