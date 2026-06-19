@@ -215,3 +215,48 @@ async def test_get_balance_returns_usdt_free(fx):
 @pytest.mark.asyncio
 async def test_fetch_funding_rate_returns_float(fx):
     assert await fx.fetch_funding_rate("BTC/USDT") == 0.0001
+
+
+@pytest.mark.asyncio
+async def test_enforce_buffer_adds_margin_when_liq_too_close(fx):
+    fx._exchange.fetch_positions = AsyncMock(return_value=[
+        {"symbol": "BTC/USDT", "side": "long", "entryPrice": 65000.0, "contracts": 0.01,
+         "unrealizedPnl": 0.0, "leverage": 20, "liquidationPrice": 64500.0}])  # ~0.77% away
+    fx._exchange.add_margin = AsyncMock(return_value={})
+    # stop is BELOW liq (64000 < 64500) -> liq is reachable first -> must act
+    action = await fx.enforce_liquidation_buffer("BTC/USDT", current_price=65000.0,
+                                                 buffer_pct=0.02, stop_loss=64000.0)
+    assert action == "margin_added"
+    fx._exchange.add_margin.assert_awaited()
+
+@pytest.mark.asyncio
+async def test_enforce_buffer_closes_when_margin_fails(fx):
+    fx._exchange.fetch_positions = AsyncMock(return_value=[
+        {"symbol": "BTC/USDT", "side": "long", "entryPrice": 65000.0, "contracts": 0.01,
+         "unrealizedPnl": 0.0, "leverage": 20, "liquidationPrice": 64500.0}])
+    fx._exchange.add_margin = AsyncMock(side_effect=Exception("cannot add margin"))
+    closes = []
+    async def spy(order, **kw):
+        closes.append(order); return order
+    fx.place_order = spy
+    action = await fx.enforce_liquidation_buffer("BTC/USDT", current_price=65000.0,
+                                                 buffer_pct=0.02, stop_loss=64000.0)
+    assert action == "closed" and closes[0].reduce_only
+
+@pytest.mark.asyncio
+async def test_enforce_buffer_noop_when_stop_protects_first(fx):
+    # stop (64600) is ABOVE liq (64500): stop fires before liq -> no action
+    fx._exchange.fetch_positions = AsyncMock(return_value=[
+        {"symbol": "BTC/USDT", "side": "long", "entryPrice": 65000.0, "contracts": 0.01,
+         "unrealizedPnl": 0.0, "leverage": 20, "liquidationPrice": 64500.0}])
+    fx._exchange.add_margin = AsyncMock()
+    action = await fx.enforce_liquidation_buffer("BTC/USDT", current_price=65000.0,
+                                                 buffer_pct=0.02, stop_loss=64600.0)
+    assert action == "ok"
+    fx._exchange.add_margin.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_enforce_buffer_default_is_noop():
+    from exchange.paper_futures import PaperFuturesExchange
+    ex = PaperFuturesExchange({"USDT": 1000.0}, leverage=5)
+    assert await ex.enforce_liquidation_buffer("BTC/USDT", 100.0, 0.02, 95.0) == "ok"

@@ -53,6 +53,11 @@ class Exchange(ABC):
         blocks them. Live USDT-M overrides with the venue rate."""
         return 0.0
 
+    async def enforce_liquidation_buffer(self, symbol: str, current_price: float,
+                                         buffer_pct: float, stop_loss: float) -> str:
+        """Post-open guard. Default no-op ('ok') — paper models liquidation in tick()."""
+        return "ok"
+
     @abstractmethod
     async def get_balance(self) -> dict[str, float]:
         """Return available balance per asset, e.g. {"USDT": 1000.0, "BTC": 0.05}."""

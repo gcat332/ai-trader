@@ -212,6 +212,36 @@ class BinanceFuturesExchange(Exchange):
             ))
         return positions
 
+    async def enforce_liquidation_buffer(self, symbol: str, current_price: float,
+                                         buffer_pct: float, stop_loss: float) -> str:
+        """If the venue's real liquidation price is inside the buffer AND the stop does
+        not already trip first, add isolated margin to push liq away (keep the thesis);
+        market-close only if margin can't be added. Never reflex-close on one reading."""
+        pos = next((p for p in await self.get_positions() if p.symbol == symbol), None)
+        if pos is None or pos.liquidation_price is None or current_price <= 0:
+            return "ok"
+        liq = pos.liquidation_price
+        dist = abs(current_price - liq) / current_price
+        if dist >= buffer_pct:
+            return "ok"
+        # If the stop fires before liq is reached, the stop protects us — do nothing.
+        stop_protects = (pos.side == "LONG" and stop_loss > liq) or \
+                        (pos.side == "SHORT" and stop_loss < liq)
+        if stop_protects:
+            return "ok"
+        # Add margin sized to roughly double the current isolated margin (push liq away).
+        try:
+            margin = (pos.entry_price * pos.quantity) / max(1, pos.leverage)
+            await self._exchange.add_margin(symbol, round(margin, 2))
+            return "margin_added"
+        except Exception:
+            close = Order(id=f"liqguard-{symbol}", symbol=symbol,
+                          side="SELL" if pos.side == "LONG" else "BUY", type="MARKET",
+                          quantity=pos.quantity, price=None, status="PENDING",
+                          exchange_order_id=None, reduce_only=True)
+            await self.place_order(close, current_price=current_price)
+            return "closed"
+
     async def seed_open_positions(self, symbols: list[str]) -> list[Position]:
         """Restart recovery: futures positions are real venue state, so just re-read
         them. Cancel any resting orders on symbols that are now flat (orphaned
