@@ -6,7 +6,7 @@ import json
 import os
 from typing import Iterable
 
-from analysis.run_backtests import run_single_strategy
+from analysis.run_backtests import INITIAL_BALANCE, run_single_strategy
 
 OUT_PATH = os.path.join(os.path.dirname(__file__), "strategy_selection.json")
 
@@ -28,13 +28,18 @@ METRIC_KEYS = (
 )
 
 
+def _reporter_drawdown_fraction(max_drawdown: float) -> float:
+    balance = float(INITIAL_BALANCE["USDT"])
+    return max_drawdown / balance
+
+
 def rank_results(
     rows: Iterable[dict], *, min_trades: int = 30, max_dd: float = 0.10
 ) -> list[dict]:
     kept = [
         row
         for row in rows
-        if row["total_trades"] >= min_trades and row["max_drawdown"] <= max_dd
+        if row["total_trades"] >= min_trades and abs(row["max_drawdown"]) <= max_dd
     ]
     return sorted(
         kept,
@@ -63,6 +68,9 @@ def select_strategy(
         for name in strategies:
             metrics = asyncio.run(run_single_strategy(name, candles))
             selected_metrics = {key: metrics.get(key, 0.0) for key in METRIC_KEYS}
+            selected_metrics["max_drawdown"] = _reporter_drawdown_fraction(
+                selected_metrics["max_drawdown"]
+            )
             rows.append({
                 "strategy": name,
                 "timeframe": timeframe,
@@ -101,6 +109,7 @@ def main() -> None:
     from analysis.run_backtests import load_candles
 
     candles_by_tf = {
+        "30m": load_candles("30m"),
         "1h": load_candles("1h"),
         "4h": load_candles("4h"),
     }
@@ -108,7 +117,7 @@ def main() -> None:
         timeframe: slice_last_days(candles, 60)
         for timeframe, candles in candles_by_tf.items()
     }
-    ranked = select_strategy(candles_by_tf, RULE_STRATEGIES)
+    ranked = select_strategy(candles_by_tf, RULE_STRATEGIES, min_trades=15, max_dd=0.10)
     _print_ranked_table(ranked)
     top_strategy = ranked[0]["strategy"] if ranked else "None"
     print(f"Top-ranked strategy: {top_strategy}")
