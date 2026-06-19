@@ -98,13 +98,18 @@ class PaperFuturesExchange(Exchange):
                 continue
             exit_price = None
             reason = None
+            liq = pos.liquidation_price
             if pos.side == "LONG":
-                if pos.stop_loss is not None and low <= pos.stop_loss:
+                if liq is not None and low <= liq:
+                    exit_price, reason = liq, "LIQUIDATION"
+                elif pos.stop_loss is not None and low <= pos.stop_loss:
                     exit_price, reason = pos.stop_loss, "SL"
                 elif pos.take_profit is not None and high >= pos.take_profit:
                     exit_price, reason = pos.take_profit, "TP"
             else:
-                if pos.stop_loss is not None and high >= pos.stop_loss:
+                if liq is not None and high >= liq:
+                    exit_price, reason = liq, "LIQUIDATION"
+                elif pos.stop_loss is not None and high >= pos.stop_loss:
                     exit_price, reason = pos.stop_loss, "SL"
                 elif pos.take_profit is not None and low <= pos.take_profit:
                     exit_price, reason = pos.take_profit, "TP"

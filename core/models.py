@@ -58,7 +58,7 @@ class TradeRecord:
     realized_pnl: float
     entry_time: datetime
     exit_time: datetime
-    exit_reason: Literal["TP", "SL", "MANUAL"]
+    exit_reason: Literal["TP", "SL", "MANUAL", "LIQUIDATION"]
     strategy_id: str = ""  # which (sub-)strategy opened the position; stamped at close
 
 
