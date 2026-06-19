@@ -15,9 +15,22 @@ import pandas as pd
 from core.live_outcome_tracker import LiveOutcomeTracker
 from core.strategy_arbiter import StrategyArbiter
 from data.fetcher import DataFetcher
+from exchange.futures_math import realized_pnl
+from exchange.paper_futures import PaperFuturesExchange
 from ml.ab_tester import ModelABTester
 from strategy.meta_strategy import MetaStrategy
 from strategy.regime import RegimeClassifier
+
+
+def mark_to_market_equity(balance, positions, mark: float) -> float:
+    equity = balance.get("USDT", 0.0)
+    for p in positions:
+        if p.mode == "FUTURES":
+            margin = p.entry_price * p.quantity / p.leverage
+            equity += margin + realized_pnl(p.side, p.entry_price, mark, p.quantity)
+        else:
+            equity += p.quantity * mark
+    return equity
 
 
 def _cooldown_elapsed(last_retrain_iso: str, days: int) -> bool:
@@ -114,7 +127,7 @@ async def run_trading_loop(
                     bal = await exchange.get_balance()
                     positions = await exchange.get_positions()
                     last_close = float(candles[-1][4]) if candles else 0.0
-                    equity = bal.get("USDT", 0.0) + sum(p.quantity * last_close for p in positions)
+                    equity = mark_to_market_equity(bal, positions, last_close)
                     risk_manager.record_current_balance(equity)
 
                     await engine.process_candles(candles)
@@ -137,6 +150,15 @@ async def run_trading_loop(
                                 ]
                             return positions
                         return [p for p in positions if p.strategy_id == strategy_filter]
+
+                    if isinstance(exchange, PaperFuturesExchange) and candles:
+                        last_candle = candles[-1]
+                        high = float(last_candle[2])
+                        low = float(last_candle[3])
+                        for trade in _mine(exchange.tick(symbol, high, low, last_close)):
+                            await engine.record_trade_outcome(trade)  # stamps trade.strategy_id
+                            await repo.insert_trade(trade)  # persist to live trade log (Trade History/Compare)
+                            outcome_tracker.forget(trade.symbol, trade.strategy_id)
 
                     positions_now = _mine(await exchange.get_positions())
                     for trade in outcome_tracker.detect_closed(positions_now, last_close):

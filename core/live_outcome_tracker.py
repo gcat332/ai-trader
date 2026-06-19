@@ -28,6 +28,10 @@ class LiveOutcomeTracker:
                 self._prev[key] = (entry, p.quantity, t0)
         # Keys that have disappeared are left in _prev for detect_closed to consume.
 
+    def forget(self, symbol: str, strategy_id: str) -> None:
+        """Drop (symbol, strategy_id) from _prev state so detect_closed won't re-emit for a tick-closed position."""
+        self._prev.pop((symbol, strategy_id), None)
+
     def detect_closed(self, positions: list[Position], current_price: float) -> list[TradeRecord]:
         now = datetime.now(timezone.utc)
         current = {(p.symbol, p.strategy_id): p for p in positions}
