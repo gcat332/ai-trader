@@ -51,6 +51,43 @@ class BinanceFuturesExchange(Exchange):
         free = float(usdt.get("free", 0.0)) if isinstance(usdt, dict) else 0.0
         return {"USDT": free}
 
+    async def _ensure_symbol_config(self, symbol: str) -> int:
+        """Set one-way mode + isolated margin + leverage for a symbol, once, serialized.
+        Leverage/margin-mode are per-symbol ACCOUNT state (not per-order), so two loops
+        on the same symbol would race; the lock + cache make it set-once. Read-back the
+        real leverage so sizing uses what the venue actually applied. Benign on the
+        'already set' / 'position open' rejections Binance raises."""
+        if symbol in self._leverage_set:
+            return self.leverage
+        async with self._lev_lock:
+            if symbol in self._leverage_set:
+                return self.leverage
+            if not getattr(self, "_position_mode_set", False):
+                try:
+                    await self._exchange.set_position_mode(False)  # one-way
+                except Exception:
+                    pass  # already one-way, or not togglable with an open position
+                self._position_mode_set = True
+            try:
+                await self._exchange.set_margin_mode("isolated", symbol)
+            except Exception:
+                pass  # -4046 no need to change / position already open
+            try:
+                await self._exchange.set_leverage(self.leverage, symbol)
+            except Exception:
+                pass  # -4028 not modified / open position
+            effective = self.leverage
+            try:
+                for p in await self._exchange.fetch_positions([symbol]):
+                    if p.get("symbol") == symbol and p.get("leverage"):
+                        effective = int(p["leverage"])
+                        break
+            except Exception:
+                pass
+            self.leverage = effective
+            self._leverage_set.add(symbol)
+            return effective
+
     async def place_order(self, order: Order, current_price: float = 0.0,
                           stop_price: float | None = None) -> Order:
         raise NotImplementedError  # Task 6
