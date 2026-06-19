@@ -45,6 +45,31 @@ def fx_protect(fx_orders):
     return fx_orders
 
 @pytest.mark.asyncio
+async def test_get_positions_uses_exchange_liquidation_price(fx):
+    fx._exchange.fetch_positions = AsyncMock(return_value=[
+        {"symbol": "BTC/USDT", "side": "long", "entryPrice": 65000.0, "contracts": 0.01,
+         "unrealizedPnl": 12.5, "leverage": 5, "liquidationPrice": 58600.0},
+        {"symbol": "ETH/USDT", "side": "short", "entryPrice": 3000.0, "contracts": 0.0,  # flat -> skip
+         "unrealizedPnl": 0.0, "leverage": 5, "liquidationPrice": None},
+    ])
+    positions = await fx.get_positions()
+    assert len(positions) == 1
+    p = positions[0]
+    assert p.symbol == "BTC/USDT" and p.side == "LONG"
+    assert p.quantity == 0.01 and p.leverage == 5
+    assert p.liquidation_price == 58600.0   # exchange truth, not recomputed
+    assert p.unrealized_pnl == 12.5
+
+@pytest.mark.asyncio
+async def test_get_positions_maps_short(fx):
+    fx._exchange.fetch_positions = AsyncMock(return_value=[
+        {"symbol": "BTC/USDT", "side": "short", "entryPrice": 65000.0, "contracts": -0.02,
+         "unrealizedPnl": -3.0, "leverage": 10, "liquidationPrice": 71000.0},
+    ])
+    p = (await fx.get_positions())[0]
+    assert p.side == "SHORT" and p.quantity == 0.02 and p.liquidation_price == 71000.0
+
+@pytest.mark.asyncio
 async def test_protect_places_stop_first_with_mark_and_closeposition(fx_protect):
     prot = await fx_protect.protect_position("BTC/USDT", side="BUY", quantity=0.01,
                                              take_profit=66000.0, stop_loss=64000.0, current_price=65000.0)

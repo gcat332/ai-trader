@@ -191,7 +191,42 @@ class BinanceFuturesExchange(Exchange):
             pass  # already filled/canceled — benign
 
     async def get_positions(self) -> list[Position]:
-        raise NotImplementedError  # Task 8
+        raw = await self._exchange.fetch_positions()
+        positions = []
+        for p in raw:
+            qty = abs(float(p.get("contracts") or 0.0))
+            if qty <= 0:
+                continue  # flat row — Binance returns a row per symbol even at 0
+            liq = p.get("liquidationPrice")
+            positions.append(Position(
+                symbol=p.get("symbol"),
+                side="LONG" if str(p.get("side", "")).lower() == "long" else "SHORT",
+                entry_price=float(p.get("entryPrice") or 0.0),
+                quantity=qty,
+                unrealized_pnl=float(p.get("unrealizedPnl") or 0.0),
+                take_profit=None,
+                stop_loss=None,
+                leverage=int(p.get("leverage") or self.leverage),
+                liquidation_price=float(liq) if liq is not None else None,
+                mode="FUTURES",
+            ))
+        return positions
+
+    async def seed_open_positions(self, symbols: list[str]) -> list[Position]:
+        """Restart recovery: futures positions are real venue state, so just re-read
+        them. Cancel any resting orders on symbols that are now flat (orphaned
+        closePosition legs are auto-removed by Binance, but a stale plain order is not)."""
+        live = await self.get_positions()
+        live_symbols = {p.symbol for p in live}
+        for symbol in symbols:
+            if symbol in live_symbols:
+                continue
+            try:
+                for o in await self._exchange.fetch_open_orders(symbol):
+                    await self.cancel_order(o.get("id"), symbol)
+            except Exception:
+                pass
+        return live
 
     async def close(self) -> None:
         await self._exchange.close()
