@@ -1,7 +1,10 @@
 import asyncio
+import logging
 import ccxt.async_support as ccxt
 from core.models import Order, Position
 from exchange.base import Exchange
+
+logger = logging.getLogger(__name__)
 
 
 class BinanceFuturesExchange(Exchange):
@@ -146,14 +149,23 @@ class BinanceFuturesExchange(Exchange):
                         "stopPrice": self._exchange.price_to_precision(symbol, stop_loss),
                         "positionSide": "BOTH"},
             )
-        except Exception:
+        except Exception as stop_exc:
             emergency = Order(id=f"emg-{symbol}", symbol=symbol,
                               side="SELL" if side.upper() == "BUY" else "BUY",
                               type="MARKET", quantity=quantity, price=None,
                               status="PENDING", exchange_order_id=None,
                               reduce_only=True, strategy_id=strategy_id)
-            await self.place_order(emergency, current_price=current_price)
-            raise
+            try:
+                await self.place_order(emergency, current_price=current_price)
+            except Exception:
+                logger.critical(
+                    "NAKED POSITION: stop placement AND emergency close both failed for %s", symbol
+                )
+                raise
+            logger.critical(
+                "stop placement failed for %s; emergency-closed the position", symbol
+            )
+            raise stop_exc
         protective = Order(id=f"stop-{symbol}", symbol=symbol,
                            side="SELL" if side.upper() == "BUY" else "BUY",
                            type="STOP_MARKET", quantity=quantity, price=stop_loss,

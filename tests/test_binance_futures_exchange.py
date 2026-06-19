@@ -1,3 +1,4 @@
+import logging
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from core.models import Order
@@ -73,6 +74,22 @@ async def test_stop_failure_triggers_emergency_close(fx_protect):
         await fx_protect.protect_position("BTC/USDT", side="BUY", quantity=0.01,
                                           take_profit=None, stop_loss=64000.0, current_price=65000.0)
     assert closes and closes[0].reduce_only and closes[0].side == "SELL"
+
+
+@pytest.mark.asyncio
+async def test_nested_failure_when_emergency_close_also_fails(fx_protect, caplog):
+    fx_protect._exchange.create_order = AsyncMock(side_effect=Exception("stop rejected"))
+
+    async def boom(order, **kw):
+        raise Exception("emergency close failed")
+
+    fx_protect.place_order = boom
+    with caplog.at_level(logging.CRITICAL, logger="exchange.binance_futures"):
+        with pytest.raises(Exception, match="emergency close failed"):
+            await fx_protect.protect_position("BTC/USDT", side="BUY", quantity=0.01,
+                                              take_profit=None, stop_loss=64000.0, current_price=65000.0)
+    assert "NAKED POSITION: stop placement AND emergency close both failed for BTC/USDT" in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_short_protect_exit_side_is_buy(fx_protect):
