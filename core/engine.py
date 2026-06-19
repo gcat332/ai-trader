@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 from core.models import DecisionRecord, Order, Signal, TradeRecord
 from exchange.base import Exchange
@@ -27,6 +27,11 @@ class Engine:
         allocation_manager=None,
         loop_id: str | None = None,
         exit_on_opposite_signal: bool = True,
+        market: str = "spot",
+        leverage: int = 1,
+        risk_per_trade: float | None = None,
+        max_hold_hours: float | None = None,
+        reentry_cooldown_bars: int = 0,
     ):
         self.exchange = exchange
         self.strategy = strategy
@@ -38,6 +43,13 @@ class Engine:
         self._allocation_manager = allocation_manager
         self._loop_id = loop_id
         self._exit_on_opposite_signal = exit_on_opposite_signal
+        self._market = market
+        self._leverage = leverage
+        self._risk_per_trade = risk_per_trade
+        self._max_hold_hours = max_hold_hours
+        self._reentry_cooldown_bars = reentry_cooldown_bars
+        self._cooldown: dict[tuple[str, str], int] = {}
+        self._opened_at: dict[tuple[str, str], datetime] = {}
         self.is_running: bool = True
         self._regime_classifier = RegimeClassifier()
         # Maps symbol → (decision_id, confidence, challenger_conf, regime, strategy_id)
@@ -113,6 +125,76 @@ class Engine:
         t["stop"] = desired
         t["order_id"] = prot.exchange_order_id if prot is not None else None
 
+    def _position_key(self, symbol: str, strategy_id: str) -> tuple[str, str]:
+        return (symbol, strategy_id)
+
+    def _find_position(self, positions, symbol: str, strategy_id: str):
+        return next(
+            (p for p in positions if p.symbol == symbol and p.strategy_id == strategy_id),
+            None,
+        )
+
+    def _is_opposite_futures_signal(self, position, signal: Signal) -> bool:
+        return (
+            (position.side == "LONG" and signal.side == "SELL")
+            or (position.side == "SHORT" and signal.side == "BUY")
+        )
+
+    async def _close_futures_position(self, position, current_price: float) -> None:
+        close_side = "SELL" if position.side == "LONG" else "BUY"
+        key = self._position_key(position.symbol, position.strategy_id)
+        order = Order(
+            id=str(uuid.uuid4()),
+            symbol=position.symbol,
+            side=close_side,
+            type="MARKET",
+            quantity=position.quantity,
+            price=None,
+            status="PENDING",
+            exchange_order_id=None,
+            strategy_id=position.strategy_id,
+            reduce_only=True,
+        )
+        await self.exchange.place_order(order, current_price=current_price)
+        self._opened_at.pop(key, None)
+        self._cooldown[key] = self._reentry_cooldown_bars
+
+    async def _close_expired_futures_position(
+        self,
+        signal: Signal,
+        positions,
+        current_price: float,
+    ) -> bool:
+        if self._max_hold_hours is None:
+            return False
+        key = self._position_key(signal.symbol, signal.strategy_id)
+        opened_at = self._opened_at.get(key)
+        if opened_at is None:
+            return False
+        if opened_at.tzinfo is None:
+            opened_at = opened_at.replace(tzinfo=timezone.utc)
+        max_age = timedelta(hours=self._max_hold_hours)
+        if datetime.now(timezone.utc) - opened_at < max_age:
+            return False
+        position = self._find_position(positions, signal.symbol, signal.strategy_id)
+        if position is None:
+            self._opened_at.pop(key, None)
+            return False
+        await self._close_futures_position(position, current_price)
+        return True
+
+    def _consume_entry_cooldown(self, key: tuple[str, str]) -> bool:
+        remaining = self._cooldown.get(key, 0)
+        if remaining <= 0:
+            self._cooldown.pop(key, None)
+            return False
+        remaining -= 1
+        if remaining > 0:
+            self._cooldown[key] = remaining
+        else:
+            self._cooldown.pop(key, None)
+        return True
+
     def _build_features(self, df, confidence: float = 0.5) -> dict[str, float]:
         # Real indicator values — feeding constant zeros made the A/B challenger
         # shadow-evaluate on garbage and could promote a worse model as champion.
@@ -169,11 +251,43 @@ class Engine:
             features = self._build_features(df, signal.confidence)
             _, challenger_conf = self._ab_tester.shadow_evaluate(features)
 
+        futures_positions = None
+        if self._market == "futures":
+            futures_positions = await self.exchange.get_positions()
+            if await self._close_expired_futures_position(
+                signal,
+                futures_positions,
+                current_price,
+            ):
+                return
+
         if signal.side == "HOLD":
             await self._log_decision(signal, "HOLD", None, regime)
             return
 
-        if signal.side == "SELL" and not self._exit_on_opposite_signal:
+        if self._market == "futures":
+            key = self._position_key(signal.symbol, signal.strategy_id)
+            held_position = self._find_position(
+                futures_positions,
+                signal.symbol,
+                signal.strategy_id,
+            )
+            if held_position is not None and self._is_opposite_futures_signal(
+                held_position,
+                signal,
+            ):
+                await self._log_decision(signal, "PLACED", None, regime)
+                await self._close_futures_position(held_position, current_price)
+                return
+            if held_position is None and self._consume_entry_cooldown(key):
+                await self._log_decision(signal, "REJECTED", "reentry_cooldown", regime)
+                return
+
+        if (
+            self._market != "futures"
+            and signal.side == "SELL"
+            and not self._exit_on_opposite_signal
+        ):
             await self._log_decision(
                 signal,
                 "REJECTED",
@@ -187,7 +301,14 @@ class Engine:
             if self._allocation_manager is not None and self._loop_id is not None:
                 balance = self._allocation_manager.scoped_balance(self._loop_id, balance)
             positions = await self.exchange.get_positions()
-            order = self._risk_manager.evaluate(signal, balance, positions)
+            order = self._risk_manager.evaluate(
+                signal,
+                balance,
+                positions,
+                market=self._market,
+                leverage=self._leverage,
+                risk_per_trade=self._risk_per_trade,
+            )
             rejection = self._risk_manager.last_rejection_reason
         else:
             order = Order(
@@ -223,6 +344,10 @@ class Engine:
             # never reach the exchange. Only protect a confirmed fill; a FAILED entry
             # has no position to protect.
             if fill.status != "FAILED":
+                if self._market == "futures":
+                    self._opened_at[
+                        self._position_key(signal.symbol, signal.strategy_id)
+                    ] = datetime.now(timezone.utc)
                 prot = await self.exchange.protect_position(
                     symbol=signal.symbol,
                     side=signal.side,

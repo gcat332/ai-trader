@@ -177,3 +177,22 @@ Notes for Next Agent: Task 5 can extend PaperFuturesExchange.tick() for TP/SL an
 liquidation; TradeRecord.exit_reason still only accepts TP, SL, and MANUAL in
 core.models for this task.
 ---
+---
+Timestamp: 2026-06-19 18:14:00 +0700
+Agent: Codex
+Task: Implement Task 7 market-aware futures signal handling in engine.py
+Files Modified: core/engine.py, tests/test_engine.py, changes.log
+Summary of Changes: Added Engine futures configuration and bookkeeping for
+market-aware risk evaluation, futures SELL-as-short entries, reduce-only
+opposite-signal closes without same-bar flip, post-close re-entry cooldown, and
+max-hold time-stop closes. Added focused PaperFuturesExchange-backed engine
+tests for short entry, close-only opposite signals, cooldown blocking, and
+time-stop closure.
+Validation: .venv/bin/python -m pytest tests/test_engine.py -k 'futures or
+opposite_signal or cooldown or time_stop' -v -> 4 failed initially with
+Engine.__init__() got an unexpected keyword argument 'market', then 4 passed
+after implementation. .venv/bin/python -m pytest tests/test_engine.py -v -> 10
+passed, 1 warning.
+Notes for Next Agent: Futures behavior is gated on market='futures'; default
+spot behavior and LOOPn_* compatibility remain unchanged.
+---
