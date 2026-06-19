@@ -212,3 +212,22 @@ Notes for Next Agent: Lazy-seed is intentionally futures-only and does not
 change spot behavior, close-only flip handling, cooldown logic, or leverage/RM
 code.
 ---
+---
+Timestamp: 2026-06-19 18:29:52 +0700
+Agent: Codex
+Task: Wire per-loop PaperFuturesExchange for paper futures loops
+Files Modified: main.py, tests/test_main_wiring.py, changes.log
+Summary of Changes: Added main._build_paper_exchange_for(), wired paper loops to
+their own PaperExchange or PaperFuturesExchange instances, passed futures
+parameters only to paper futures Engine instances, and routed reconciliation,
+trading loops, and the API representative exchange through the per-loop exchange
+wiring while preserving live shared-Binance behavior.
+Validation: .venv/bin/python -m pytest tests/test_main_wiring.py -v -> failed
+first with ImportError for _build_paper_exchange_for, then 2 passed after
+implementation. .venv/bin/python -m pytest -q -> failed only because local
+API_KEY caused 4 pre-existing API endpoint tests to return 401. API_KEY=
+.venv/bin/python -m pytest -q -> 418 passed, 4 skipped, 1 warning.
+Notes for Next Agent: The exact full-suite command still depends on clearing a
+local API_KEY unless API auth tests are later isolated. Untracked package.json
+and package-lock.json were already present and were not modified.
+---
