@@ -40,7 +40,7 @@ class PaperFuturesExchange(Exchange):
         usdt = self._balance.get("USDT", 0.0)
         if margin > usdt:
             raise ValueError(f"insufficient margin: need {margin:.2f}, have {usdt:.2f}")
-        self._balance["USDT"] = usdt - margin
+        self._balance["USDT"] = usdt - margin - notional * self._fee_rate
         self._positions[key] = Position(
             symbol=order.symbol, side=side, entry_price=fill, quantity=order.quantity,
             unrealized_pnl=0.0, take_profit=None, stop_loss=None, mode="FUTURES",
@@ -123,4 +123,4 @@ class PaperFuturesExchange(Exchange):
         return list(self._positions.values())
 
     async def get_balance(self):
-        return {k: v for k, v in self._balance.items() if v > 0}
+        return dict(self._balance)

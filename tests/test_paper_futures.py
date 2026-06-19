@@ -14,8 +14,8 @@ async def test_open_long_reserves_margin():
     ex = PaperFuturesExchange({"USDT": 1000.0}, leverage=5, slippage_bps=0.0)
     await ex.place_order(_order("BUY", 1.0), current_price=100.0)
     bal = await ex.get_balance()
-    # notional 100, 5x -> 20 margin reserved
-    assert bal["USDT"] == pytest.approx(980.0, abs=0.01)
+    # notional 100, 5x -> 20 margin reserved, plus 0.04 entry fee
+    assert bal["USDT"] == pytest.approx(979.96, abs=0.01)
     pos = (await ex.get_positions())[0]
     assert pos.side == "LONG"
     assert pos.leverage == 5
@@ -44,3 +44,10 @@ async def test_open_rejects_insufficient_margin():
     ex = PaperFuturesExchange({"USDT": 10.0}, leverage=1, slippage_bps=0.0)
     with pytest.raises(ValueError, match="margin"):
         await ex.place_order(_order("BUY", 1.0), current_price=100.0)
+
+
+@pytest.mark.asyncio
+async def test_get_balance_includes_negative_values():
+    ex = PaperFuturesExchange({"USDT": -5.0, "BNB": 0.0}, leverage=1, slippage_bps=0.0)
+
+    assert await ex.get_balance() == {"USDT": -5.0, "BNB": 0.0}
