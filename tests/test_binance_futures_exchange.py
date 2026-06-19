@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from core.models import Order
 from exchange.binance_futures import BinanceFuturesExchange
 
 
@@ -15,6 +16,55 @@ def fx():
         m.close = AsyncMock()
         MockBinance.return_value = m
         yield BinanceFuturesExchange(api_key="k", api_secret="s", testnet=True, leverage=5)
+
+
+def _order(side, qty, reduce_only=False):
+    return Order(id="o1", symbol="BTC/USDT", side=side, type="MARKET", quantity=qty,
+                 price=None, status="PENDING", exchange_order_id=None, reduce_only=reduce_only)
+
+
+@pytest.fixture
+def fx_orders(fx):
+    fx._exchange.market = MagicMock(return_value={"limits": {"cost": {"min": 5.0}}})
+    fx._exchange.amount_to_precision = MagicMock(side_effect=lambda s, a: round(a, 3))
+    fx._exchange.set_margin_mode = AsyncMock()
+    fx._exchange.set_leverage = AsyncMock()
+    fx._exchange.fetch_positions = AsyncMock(return_value=[{"symbol": "BTC/USDT", "leverage": 5}])
+    fx._exchange.create_order = AsyncMock(return_value={"id": "ex-1", "status": "closed", "average": 65000.0})
+    return fx
+
+
+@pytest.mark.asyncio
+async def test_open_long_market(fx_orders):
+    filled = await fx_orders.place_order(_order("BUY", 0.01), current_price=65000.0)
+    assert filled.status == "FILLED"
+    assert filled.exchange_order_id == "ex-1"
+    _, kwargs = fx_orders._exchange.create_order.call_args
+    assert kwargs["params"]["positionSide"] == "BOTH"
+    assert "reduceOnly" not in kwargs["params"]
+
+
+@pytest.mark.asyncio
+async def test_exit_is_reduce_only(fx_orders):
+    await fx_orders.place_order(_order("SELL", 0.01, reduce_only=True), current_price=65000.0)
+    _, kwargs = fx_orders._exchange.create_order.call_args
+    assert kwargs["params"]["reduceOnly"] is True
+
+
+@pytest.mark.asyncio
+async def test_below_min_notional_rejected_not_opened(fx_orders):
+    # 0.00001 * 65000 = 0.65 USDT < 5.0 min -> never sent
+    filled = await fx_orders.place_order(_order("BUY", 0.00001), current_price=65000.0)
+    assert filled.status == "REJECTED"
+    assert filled.quantity == 0
+    fx_orders._exchange.create_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reduce_only_no_position_is_benign(fx_orders):
+    fx_orders._exchange.create_order = AsyncMock(side_effect=Exception("binance -2022 ReduceOnly Order is rejected"))
+    filled = await fx_orders.place_order(_order("SELL", 0.01, reduce_only=True), current_price=65000.0)
+    assert filled.status == "FILLED"  # already flat — treat as a no-op success
 
 
 @pytest.mark.asyncio
