@@ -26,7 +26,7 @@ def mark_to_market_equity(balance, positions, mark: float) -> float:
     equity = balance.get("USDT", 0.0)
     for p in positions:
         if p.mode == "FUTURES":
-            margin = p.entry_price * p.quantity / p.leverage
+            margin = p.entry_price * p.quantity / max(1, p.leverage)
             equity += margin + realized_pnl(p.side, p.entry_price, mark, p.quantity)
         else:
             equity += p.quantity * mark

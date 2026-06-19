@@ -286,3 +286,24 @@ for tick TradeRecords and position snapshots. Full-suite count is 430 passed
 because this task adds five tests; package.json and package-lock.json were already
 untracked and were not modified.
 ---
+---
+Timestamp: 2026-06-19 19:31:50 +0700
+Agent: Codex
+Task: Fix futures SHORT position PnL sign in live_outcome_tracker.detect_closed
+Files Modified: core/live_outcome_tracker.py, core/trading_loop.py,
+tests/test_live_outcome_tracker.py, changes.log
+Summary of Changes: Stored position side in LiveOutcomeTracker previous-state
+tuples, used exchange.futures_math.realized_pnl() for side-aware synthetic close
+PnL, emitted SELL close records for LONG and BUY close records for SHORT, and
+added the requested leverage floor in mark_to_market_equity().
+Validation: .venv/bin/python -m pytest tests/test_live_outcome_tracker.py -k
+"test_detect_closed_long_pnl_unchanged or test_detect_closed_short_pnl_sign or
+test_detect_closed_short_profit" -v -> 3 passed after implementation, with the
+two SHORT tests failing first against the old long-only formula.
+.venv/bin/python -m pytest tests/test_live_outcome_tracker.py -v -> 7 passed.
+.venv/bin/python -m pytest tests/test_trading_loop_futures.py -q -> 5 passed,
+1 warning. .venv/bin/python -m pytest -q -> 433 passed, 4 skipped, 1 warning.
+Notes for Next Agent: Existing untracked package.json and package-lock.json were
+not modified. Long close PnL remains the same numerical formula via
+realized_pnl("LONG", entry, exit, qty).
+---
