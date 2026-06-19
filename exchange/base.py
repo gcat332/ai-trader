@@ -47,6 +47,12 @@ class Exchange(ABC):
         need nothing. Returns the recovered positions."""
         return []
 
+    async def fetch_funding_rate(self, symbol: str) -> float:
+        """Current funding rate for a perpetual symbol (e.g. 0.0001 = 0.01%/8h).
+        Default 0.0 — spot and paper have no funding, so the funding gate never
+        blocks them. Live USDT-M overrides with the venue rate."""
+        return 0.0
+
     @abstractmethod
     async def get_balance(self) -> dict[str, float]:
         """Return available balance per asset, e.g. {"USDT": 1000.0, "BTC": 0.05}."""

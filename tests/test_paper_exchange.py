@@ -142,3 +142,17 @@ async def test_buy_insufficient_funds_fails(exchange):
     assert balance.get("BTC", 0.0) == 0.0
     positions = await exchange.get_positions()
     assert len(positions) == 0
+
+
+@pytest.mark.asyncio
+async def test_paper_exchange_funding_rate_is_zero():
+    from exchange.paper import PaperExchange
+    ex = PaperExchange(initial_balance={"USDT": 1000.0})
+    assert await ex.fetch_funding_rate("BTC/USDT") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_paper_futures_funding_rate_is_zero():
+    from exchange.paper_futures import PaperFuturesExchange
+    ex = PaperFuturesExchange({"USDT": 1000.0}, leverage=5)
+    assert await ex.fetch_funding_rate("BTC/USDT") == 0.0
