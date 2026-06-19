@@ -169,14 +169,20 @@ class Engine:
             return False
         key = self._position_key(signal.symbol, signal.strategy_id)
         opened_at = self._opened_at.get(key)
+        position = None
         if opened_at is None:
+            position = self._find_position(positions, signal.symbol, signal.strategy_id)
+            if position is None:
+                return False
+            # ponytail: restart loses exact open time; re-seed from now so the position still ages out. Exact cross-restart age needs Position.entry_time (M2, live exchange).
+            self._opened_at[key] = datetime.now(timezone.utc)
             return False
         if opened_at.tzinfo is None:
             opened_at = opened_at.replace(tzinfo=timezone.utc)
         max_age = timedelta(hours=self._max_hold_hours)
         if datetime.now(timezone.utc) - opened_at < max_age:
             return False
-        position = self._find_position(positions, signal.symbol, signal.strategy_id)
+        position = position or self._find_position(positions, signal.symbol, signal.strategy_id)
         if position is None:
             self._opened_at.pop(key, None)
             return False

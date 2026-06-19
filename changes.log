@@ -196,3 +196,19 @@ passed, 1 warning.
 Notes for Next Agent: Futures behavior is gated on market='futures'; default
 spot behavior and LOOPn_* compatibility remain unchanged.
 ---
+---
+Timestamp: 2026-06-19 18:23:34 +0700
+Agent: Codex
+Task: Fix Task 7 futures time-stop and strengthen engine tests
+Files Modified: core/engine.py, tests/test_engine.py, changes.log
+Summary of Changes: Lazy-seeded futures _opened_at when an existing position
+survives restart without in-memory open time, so max-hold aging resumes from
+the first observed bar instead of being bypassed forever. Extended engine tests
+for cooldown release, not-yet-expired time-stop behavior, engine-opened
+_opened_at population, and restart lazy-seeding.
+Validation: .venv/bin/python -m pytest tests/test_engine.py -v -> 13 passed,
+1 warning.
+Notes for Next Agent: Lazy-seed is intentionally futures-only and does not
+change spot behavior, close-only flip handling, cooldown logic, or leverage/RM
+code.
+---

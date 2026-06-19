@@ -316,6 +316,17 @@ async def test_reentry_blocked_during_cooldown():
     assert await exchange.get_positions() == []
     assert exchange.orders == []
 
+    await engine.process_candles([
+        [1700007200000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    positions = await exchange.get_positions()
+    assert len(positions) == 1
+    assert positions[0].side == "LONG"
+    assert len(exchange.orders) == 1
+    assert exchange.orders[0].side == "BUY"
+    assert exchange.orders[0].reduce_only is False
+
 
 @pytest.mark.asyncio
 async def test_time_stop_closes_old_position():
@@ -356,6 +367,109 @@ async def test_time_stop_closes_old_position():
     assert len(exchange.orders) == 1
     assert exchange.orders[0].side == "SELL"
     assert exchange.orders[0].reduce_only is True
+
+
+@pytest.mark.asyncio
+async def test_time_stop_keeps_not_yet_expired_position_open():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    await exchange.place_order(
+        Order(
+            id="long",
+            symbol="BTC/USDT",
+            side="BUY",
+            type="MARKET",
+            quantity=0.01,
+            price=None,
+            status="PENDING",
+            exchange_order_id=None,
+            strategy_id="futures_time_stop_young",
+        ),
+        current_price=65000.0,
+    )
+    exchange.orders.clear()
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysHoldStrategy(strategy_id="futures_time_stop_young"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=RiskManager(),
+        market="futures",
+        max_hold_hours=2,
+    )
+    engine._opened_at[("BTC/USDT", "futures_time_stop_young")] = (
+        datetime.now(timezone.utc) - timedelta(minutes=30)
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    positions = await exchange.get_positions()
+    assert len(positions) == 1
+    assert positions[0].strategy_id == "futures_time_stop_young"
+    assert exchange.orders == []
+
+
+@pytest.mark.asyncio
+async def test_engine_opened_futures_position_records_opened_at():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_engine_opened"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=RiskManager(),
+        market="futures",
+        max_hold_hours=2,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    key = ("BTC/USDT", "futures_engine_opened")
+    assert key in engine._opened_at
+    assert engine._opened_at[key].tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_time_stop_lazy_seeds_missing_opened_at_after_restart():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    await exchange.place_order(
+        Order(
+            id="long",
+            symbol="BTC/USDT",
+            side="BUY",
+            type="MARKET",
+            quantity=0.01,
+            price=None,
+            status="PENDING",
+            exchange_order_id=None,
+            strategy_id="futures_time_stop_restarted",
+        ),
+        current_price=65000.0,
+    )
+    exchange.orders.clear()
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysHoldStrategy(strategy_id="futures_time_stop_restarted"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=RiskManager(),
+        market="futures",
+        max_hold_hours=2,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    key = ("BTC/USDT", "futures_time_stop_restarted")
+    positions = await exchange.get_positions()
+    assert len(positions) == 1
+    assert key in engine._opened_at
+    assert datetime.now(timezone.utc) - engine._opened_at[key] < timedelta(seconds=5)
+    assert exchange.orders == []
 
 
 def exchange_sell_count(exchange: PaperExchange) -> int:
