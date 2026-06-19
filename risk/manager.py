@@ -1,6 +1,7 @@
 # risk/manager.py
 import uuid
 from core.models import Order
+from exchange.futures_math import liquidation_price
 
 
 class RiskManager:
@@ -79,7 +80,18 @@ class RiskManager:
             "peak_balance": self._peak_balance,
         }
 
-    def evaluate(self, signal, balance, positions) -> Order | None:
+    def evaluate(
+        self,
+        signal,
+        balance,
+        positions,
+        *,
+        market="spot",
+        leverage=1,
+        risk_per_trade=None,
+        mmr=0.005,
+        liq_buffer_pct=0.0,
+    ) -> Order | None:
         self._last_rejection_reason = None
         if self._global_kill_switch:
             self._last_rejection_reason = "global_kill_switch"
@@ -109,20 +121,36 @@ class RiskManager:
         # double-enter its OWN position; correlation still blocks a DIFFERENT
         # correlated symbol (e.g. ETH while BTC is open).
         own_symbols = {p.symbol for p in positions if p.strategy_id == signal.strategy_id}
-        if signal.side == "SELL" and signal.symbol not in own_symbols:
+        is_futures = market == "futures"
+        opening = signal.side == "BUY" or (is_futures and signal.side == "SELL")
+        signal_position_side = "LONG" if signal.side == "BUY" else "SHORT"
+        own_position = next(
+            (p for p in positions if p.symbol == signal.symbol and p.strategy_id == signal.strategy_id),
+            None,
+        )
+
+        if signal.side == "SELL" and signal.symbol not in own_symbols and not is_futures:
             self._last_rejection_reason = "sell_no_position"
             return None
         if signal.side == "BUY" and signal.symbol in own_symbols:
             self._last_rejection_reason = "re_entry"
             return None
+        if (
+            is_futures
+            and signal.symbol in own_symbols
+            and own_position is not None
+            and own_position.side == signal_position_side
+        ):
+            self._last_rejection_reason = "re_entry"
+            return None
 
         _CORRELATED = {"BTC/USDT", "ETH/USDT"}
-        if signal.side == "BUY" and signal.symbol in _CORRELATED:
+        if opening and signal.symbol in _CORRELATED:
             if any(p.symbol in _CORRELATED and p.symbol != signal.symbol for p in positions):
                 self._last_rejection_reason = "correlation_filter"
                 return None
 
-        if signal.side == "BUY" and self._max_exposure_exceeded(balance, positions):
+        if opening and self._max_exposure_exceeded(balance, positions):
             self._last_rejection_reason = "max_exposure"
             return None
 
@@ -132,16 +160,40 @@ class RiskManager:
             self._last_rejection_reason = "low_confidence"
             return None
 
-        if signal.side == "SELL":
+        if is_futures and opening:
+            if signal.side == "BUY" and signal.stop_loss >= signal.entry_price:
+                self._last_rejection_reason = "invalid_stop_loss"
+                return None
+            if signal.side == "SELL" and signal.stop_loss <= signal.entry_price:
+                self._last_rejection_reason = "invalid_stop_loss"
+                return None
+
+            side_ls = "LONG" if signal.side == "BUY" else "SHORT"
+            liq = liquidation_price(side_ls, signal.entry_price, leverage, mmr)
+            buffered_liq = liq * (1 - liq_buffer_pct) if side_ls == "LONG" else liq * (1 + liq_buffer_pct)
+            if side_ls == "LONG" and signal.stop_loss <= buffered_liq:
+                self._last_rejection_reason = "liquidation_guard"
+                return None
+            if side_ls == "SHORT" and signal.stop_loss >= buffered_liq:
+                self._last_rejection_reason = "liquidation_guard"
+                return None
+
+        usdt = balance.get("USDT", 0.0)
+        if signal.side == "SELL" and not is_futures:
             # Exit order: sell exactly what THIS strategy holds, not a fresh notional
             # slice and not another strategy's position (guaranteed to exist above).
-            pos = next((p for p in positions if p.symbol == signal.symbol
-                        and p.strategy_id == signal.strategy_id), None)
-            quantity = pos.quantity if pos else 0.0
+            quantity = round(own_position.quantity if own_position else 0.0, 8)
+        elif risk_per_trade is not None:
+            stop_distance = abs(signal.entry_price - signal.stop_loss)
+            if stop_distance <= 0:
+                self._last_rejection_reason = "invalid_stop_loss"
+                return None
+            risk_qty = (usdt * risk_per_trade) / stop_distance
+            margin_qty_cap = (usdt * self._max_position_pct * leverage) / signal.entry_price
+            quantity = round(min(risk_qty, margin_qty_cap), 8)
         else:
-            usdt = balance.get("USDT", 0.0)
             scaled_pct = self._max_position_pct * signal.confidence
-            quantity = round((usdt * scaled_pct) / signal.entry_price, 8)
+            quantity = round((usdt * scaled_pct * leverage) / signal.entry_price, 8)
         if quantity <= 0:
             self._last_rejection_reason = "zero_quantity"
             return None
@@ -155,6 +207,7 @@ class RiskManager:
             price=None,
             status="PENDING",
             exchange_order_id=None,
+            strategy_id=signal.strategy_id,
         )
 
     @property

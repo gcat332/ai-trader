@@ -229,3 +229,78 @@ def test_max_exposure_blocks_new_buy_when_enabled():
 
     assert risk.evaluate(_buy_signal(), {"USDT": 10000.0}, positions) is None
     assert risk.last_rejection_reason == "max_exposure"
+
+
+def test_futures_sell_opens_short_not_rejected(risk):
+    sell_signal = Signal(
+        symbol="BTC/USDT", side="SELL", entry_price=65000.0,
+        take_profit=63000.0, stop_loss=67000.0, trailing_sl=False,
+        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
+    )
+
+    order = risk.evaluate(
+        sell_signal,
+        {"USDT": 10000.0},
+        [],
+        market="futures",
+        leverage=3,
+    )
+
+    assert order is not None
+    assert order.side == "SELL"
+    assert order.strategy_id == "rsi_macd"
+
+
+def test_futures_short_requires_sl_above_entry(risk):
+    sell_signal = Signal(
+        symbol="BTC/USDT", side="SELL", entry_price=65000.0,
+        take_profit=63000.0, stop_loss=64000.0, trailing_sl=False,
+        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
+    )
+
+    assert risk.evaluate(sell_signal, {"USDT": 10000.0}, [], market="futures") is None
+    assert risk.last_rejection_reason == "invalid_stop_loss"
+
+
+def test_risk_per_trade_sizes_off_stop_distance(risk):
+    buy_signal = _buy_signal(stop_loss=64000.0)
+
+    order = risk.evaluate(
+        buy_signal,
+        {"USDT": 10000.0},
+        [],
+        market="futures",
+        leverage=10,
+        risk_per_trade=0.002,
+    )
+
+    assert order is not None
+    assert order.quantity == pytest.approx(0.02)
+
+
+def test_liquidation_guard_rejects_sl_beyond_liq(risk):
+    buy_signal = _buy_signal(stop_loss=58000.0)
+
+    assert (
+        risk.evaluate(
+            buy_signal,
+            {"USDT": 10000.0},
+            [],
+            market="futures",
+            leverage=10,
+            mmr=0.005,
+        )
+        is None
+    )
+    assert risk.last_rejection_reason == "liquidation_guard"
+
+
+def test_spot_unchanged_sell_without_position_rejected(risk):
+    sell_signal = Signal(
+        symbol="BTC/USDT", side="SELL", entry_price=65000.0,
+        take_profit=63000.0, stop_loss=67000.0, trailing_sl=False,
+        confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
+    )
+
+    assert risk.evaluate(sell_signal, {"USDT": 10000.0}, []) is None
+    assert risk.last_rejection_reason == "sell_no_position"
