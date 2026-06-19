@@ -158,3 +158,22 @@ Summary of Changes: Added a pull-request GitHub Actions workflow that targets PR
 Validation: .venv/bin/python -m pytest tests/test_release_safety_workflow.py -q -> 2 passed. .venv/bin/python -m pytest tests/test_api.py tests/test_telegram.py tests/test_telegram_multiloop.py tests/test_telegram_health_monitor.py tests/test_reports_scheduler.py tests/test_trading_loop_daily_reset.py tests/test_go_live_safety.py tests/test_live_controller.py tests/test_shutdown_cleanup.py -q -> 83 passed, 1 warning.
 Notes for Next Agent: CAT-15 can now validate whether this PR gate coverage is sufficient as a required merge check. Spot testnet contract coverage is still manual for exchange/order-path changes.
 ---
+---
+Timestamp: 2026-06-19 17:34:29 +0700
+Agent: Codex
+Task: Implement Task 4 PaperFuturesExchange
+Files Modified: exchange/paper_futures.py, tests/test_paper_futures.py, changes.log
+Summary of Changes: Added the Task 4 paper futures exchange simulator with
+long/short position opening, isolated margin reservation, leverage-aware
+liquidation price calculation, entry slippage, reduce-only manual close support,
+and TP/SL tick handling without Task 5 liquidation behavior. Added the four brief-specified tests
+covering long margin reservation, short creation, entry slippage, and
+insufficient margin rejection.
+Validation: .venv/bin/python -m pytest tests/test_paper_futures.py -v -> 4
+passed. .venv/bin/python -m pytest -> failed only because local API_KEY caused 4
+pre-existing API endpoint tests to return 401. API_KEY= .venv/bin/python -m
+pytest -> 396 passed, 4 skipped, 1 warning.
+Notes for Next Agent: Task 5 can extend PaperFuturesExchange.tick() for TP/SL and
+liquidation; TradeRecord.exit_reason still only accepts TP, SL, and MANUAL in
+core.models for this task.
+---
