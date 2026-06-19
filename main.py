@@ -32,6 +32,7 @@ from types import SimpleNamespace
 from db.repository import Repository
 from db.schema import init_db
 from exchange.binance import BinanceExchange
+from exchange.binance_futures import BinanceFuturesExchange
 from exchange.paper import PaperExchange
 from exchange.paper_futures import PaperFuturesExchange
 from ml.retrainer import ModelRetrainer
@@ -63,6 +64,17 @@ def _build_paper_exchange_for(cfg, initial_balance):
             leverage=getattr(cfg, "leverage", 1),
         )
     return PaperExchange(initial_balance=initial_balance)
+
+
+def _build_live_exchange_for(cfg, settings, spot_exchange):
+    if getattr(cfg, "market", "spot") == "futures":
+        return BinanceFuturesExchange(
+            api_key=settings.binance_api_key,
+            api_secret=settings.binance_api_secret,
+            testnet=settings.binance_testnet,
+            leverage=getattr(cfg, "leverage", 1),
+        )
+    return spot_exchange
 
 
 def _runtime_is_scheduled(runtime_config) -> bool:
@@ -227,12 +239,12 @@ async def run():
         if not loop_specs:
             raise ValueError("No scheduled LIVE/PAPER runtime configs found")
 
-        # ponytail: paper per-loop exchange only; live per-(market,network) isolation is M2.
+        # ponytail: paper loops are isolated; live futures get futures clients while spot shares spot.
         for spec in loop_specs:
             spec.exchange = (
                 _build_paper_exchange_for(spec.config, {"USDT": 10000.0})
                 if paper_mode
-                else exchange
+                else _build_live_exchange_for(spec.config, settings, exchange)
             )
 
         allocation_manager = AllocationManager({
@@ -266,13 +278,15 @@ async def run():
 
             for spec in loop_specs:
                 engine_kwargs = {}
-                if paper_mode and spec.config.market == "futures":
+                if spec.config.market == "futures":
                     engine_kwargs = {
                         "market": spec.config.market,
                         "leverage": spec.config.leverage,
                         "risk_per_trade": spec.config.risk_per_trade,
                         "max_hold_hours": spec.config.max_hold_hours,
                         "reentry_cooldown_bars": spec.config.reentry_cooldown_bars,
+                        "funding_skip_threshold": spec.config.funding_skip_threshold,
+                        "liq_buffer_pct": float(os.getenv("LIQ_BUFFER_PCT", "0.0")),
                     }
                 spec.engine = Engine(
                     exchange=spec.exchange,

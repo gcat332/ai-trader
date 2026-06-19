@@ -137,6 +137,7 @@ def parse_runtime_configs(env: dict) -> list[StrategyRuntimeConfig]:
             risk_per_trade=None,
             max_hold_hours=None,
             reentry_cooldown_bars=0,
+            funding_skip_threshold=0.001,
         )]
 
     configs: list[StrategyRuntimeConfig] = []
@@ -155,6 +156,10 @@ def parse_runtime_configs(env: dict) -> list[StrategyRuntimeConfig]:
         max_hold_hours_raw = lp.get("MAX_HOLD_HOURS", "")
         max_hold_hours = float(max_hold_hours_raw) if max_hold_hours_raw else None
         reentry_cooldown_bars = int(lp.get("REENTRY_COOLDOWN_BARS", "0"))
+        funding_skip_threshold = float(lp.get(
+            "FUNDING_SKIP_THRESHOLD",
+            env.get("FUNDING_SKIP_THRESHOLD", "0.001"),
+        ))
         if market not in ("spot", "futures"):
             raise ValueError(f"Invalid {prefix}market={market!r}; expected spot or futures")
         if leverage > 1 and market != "futures":
@@ -180,5 +185,6 @@ def parse_runtime_configs(env: dict) -> list[StrategyRuntimeConfig]:
             risk_per_trade=risk_per_trade,
             max_hold_hours=max_hold_hours,
             reentry_cooldown_bars=reentry_cooldown_bars,
+            funding_skip_threshold=funding_skip_threshold,
         ))
     return configs
