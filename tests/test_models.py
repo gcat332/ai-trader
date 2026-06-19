@@ -66,6 +66,20 @@ def test_position_pnl_field():
     assert pos.mode == "SPOT"
 
 
+from core.models import Order, Position
+
+def test_order_reduce_only_defaults_false():
+    o = Order(id="1", symbol="BTC/USDT", side="SELL", type="MARKET",
+              quantity=1.0, price=None, status="PENDING", exchange_order_id=None)
+    assert o.reduce_only is False
+
+def test_position_futures_fields_default():
+    p = Position(symbol="BTC/USDT", side="SHORT", entry_price=100.0, quantity=1.0,
+                 unrealized_pnl=0.0, take_profit=None, stop_loss=None, mode="FUTURES")
+    assert p.leverage == 1
+    assert p.liquidation_price is None
+
+
 from core.models import DecisionRecord, SignalOutcome, StrategyProfile, StrategySwitch
 
 

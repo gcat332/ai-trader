@@ -33,6 +33,7 @@ from db.repository import Repository
 from db.schema import init_db
 from exchange.binance import BinanceExchange
 from exchange.paper import PaperExchange
+from exchange.paper_futures import PaperFuturesExchange
 from ml.retrainer import ModelRetrainer
 from notifier.logger import get_logger
 from notifier.telegram import TelegramNotifier
@@ -52,6 +53,16 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None or raw == "":
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_paper_exchange_for(cfg, initial_balance):
+    """Build per-loop exchange for paper mode: PaperFuturesExchange if futures, else PaperExchange."""
+    if getattr(cfg, "market", "spot") == "futures":
+        return PaperFuturesExchange(
+            initial_balance,
+            leverage=getattr(cfg, "leverage", 1),
+        )
+    return PaperExchange(initial_balance=initial_balance)
 
 
 def _runtime_is_scheduled(runtime_config) -> bool:
@@ -215,6 +226,15 @@ async def run():
             )
         if not loop_specs:
             raise ValueError("No scheduled LIVE/PAPER runtime configs found")
+
+        # ponytail: paper per-loop exchange only; live per-(market,network) isolation is M2.
+        for spec in loop_specs:
+            spec.exchange = (
+                _build_paper_exchange_for(spec.config, {"USDT": 10000.0})
+                if paper_mode
+                else exchange
+            )
+
         allocation_manager = AllocationManager({
             spec.config.loop_id: spec.config.allocation_pct
             for spec in loop_specs
@@ -245,8 +265,17 @@ async def run():
             repo = Repository(conn)
 
             for spec in loop_specs:
+                engine_kwargs = {}
+                if paper_mode and spec.config.market == "futures":
+                    engine_kwargs = {
+                        "market": spec.config.market,
+                        "leverage": spec.config.leverage,
+                        "risk_per_trade": spec.config.risk_per_trade,
+                        "max_hold_hours": spec.config.max_hold_hours,
+                        "reentry_cooldown_bars": spec.config.reentry_cooldown_bars,
+                    }
                 spec.engine = Engine(
-                    exchange=exchange,
+                    exchange=spec.exchange,
                     strategy=spec.strategy,
                     symbol=spec.symbol,
                     timeframe=spec.timeframe,
@@ -256,6 +285,7 @@ async def run():
                     allocation_manager=allocation_manager,
                     loop_id=spec.config.loop_id,
                     exit_on_opposite_signal=spec.config.exit_on_opposite_signal,
+                    **engine_kwargs,
                 )
                 spec.engine.is_running = True
 
@@ -265,20 +295,33 @@ async def run():
             try:
                 # Restart recovery: re-register each loop's trading symbol as an open
                 # position from its balance (entry price unknown until the next fill).
-                symbols = {spec.symbol for spec in loop_specs}
-                await exchange.seed_open_positions(list(symbols))
-                open_positions = await exchange.get_positions()
-                tracked = {sym for spec in loop_specs for sym in spec.engine._active_decisions}
-                for p in open_positions:
-                    if p.symbol not in tracked:
-                        logger.warning(
-                            f"Reconcile: untracked open position {p.symbol} qty={p.quantity} "
-                            "(no decision record — outcome will not be attributed)"
-                        )
+                if paper_mode:
+                    for spec in loop_specs:
+                        await spec.exchange.seed_open_positions([spec.symbol])
+                        open_positions = await spec.exchange.get_positions()
+                        tracked = set(spec.engine._active_decisions)
+                        for p in open_positions:
+                            if p.symbol not in tracked:
+                                logger.warning(
+                                    f"Reconcile: untracked open position {p.symbol} qty={p.quantity} "
+                                    "(no decision record — outcome will not be attributed)"
+                                )
+                else:
+                    symbols = {spec.symbol for spec in loop_specs}
+                    await exchange.seed_open_positions(list(symbols))
+                    open_positions = await exchange.get_positions()
+                    tracked = {sym for spec in loop_specs for sym in spec.engine._active_decisions}
+                    for p in open_positions:
+                        if p.symbol not in tracked:
+                            logger.warning(
+                                f"Reconcile: untracked open position {p.symbol} qty={p.quantity} "
+                                "(no decision record — outcome will not be attributed)"
+                            )
             except Exception as e:
                 logger.error(f"Startup reconciliation failed: {e}")
 
-            balance = await exchange.get_balance()
+            api_exchange = loop_specs[0].exchange if paper_mode else exchange
+            balance = await api_exchange.get_balance()
             daily_start = balance.get("USDT", 10000.0)
             # Seed the daily-loss circuit breaker so RiskManager has a baseline to
             # measure drawdown against from the very first iteration.
@@ -300,7 +343,8 @@ async def run():
                 )
                 logger.info("Telegram bot configured")
 
-            app = create_app(repo, exchange=exchange, controller=controller)
+            # ponytail: API surfaces one representative exchange in M1.
+            app = create_app(repo, exchange=api_exchange, controller=controller)
 
             if api_host not in ("127.0.0.1", "localhost") and not os.getenv("API_KEY"):
                 logger.warning(
@@ -333,7 +377,7 @@ async def run():
                     run_supervised(
                         name=f"trading:{spec.config.loop_id}",
                         task_factory=lambda spec=spec: run_trading_loop(
-                            exchange=exchange,
+                            exchange=spec.exchange,
                             paper_mode=paper_mode,
                             strategy=spec.strategy,
                             symbol=spec.symbol,

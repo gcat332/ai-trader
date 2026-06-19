@@ -132,6 +132,11 @@ def parse_runtime_configs(env: dict) -> list[StrategyRuntimeConfig]:
             exit_on_opposite_signal=_bool_for("", env, "EXIT_ON_OPPOSITE_SIGNAL", True),
             techniques=_techniques_for("", env, default_strategy),
             default_strategy=default_strategy,
+            market="spot",
+            leverage=1,
+            risk_per_trade=None,
+            max_hold_hours=None,
+            reentry_cooldown_bars=0,
         )]
 
     configs: list[StrategyRuntimeConfig] = []
@@ -143,6 +148,17 @@ def parse_runtime_configs(env: dict) -> list[StrategyRuntimeConfig]:
         default_strategy = env.get(f"{prefix}DEFAULT_STRATEGY", lp.strategy)
         techniques = _techniques_for(prefix, env, default_strategy)
         instance_strategy = _strategy_instance_name(strategy_mode, lp.strategy)
+        market = lp.get("MARKET", env.get("TRADING_MARKET", "spot")).strip().lower()
+        leverage = int(lp.get("LEVERAGE", env.get("LEVERAGE", "1")))
+        risk_per_trade_raw = lp.get("RISK_PER_TRADE", "")
+        risk_per_trade = float(risk_per_trade_raw) if risk_per_trade_raw else None
+        max_hold_hours_raw = lp.get("MAX_HOLD_HOURS", "")
+        max_hold_hours = float(max_hold_hours_raw) if max_hold_hours_raw else None
+        reentry_cooldown_bars = int(lp.get("REENTRY_COOLDOWN_BARS", "0"))
+        if market not in ("spot", "futures"):
+            raise ValueError(f"Invalid {prefix}market={market!r}; expected spot or futures")
+        if leverage > 1 and market != "futures":
+            raise ValueError(f"{prefix}leverage={leverage} requires market=futures")
         configs.append(StrategyRuntimeConfig(
             loop_id=loop_id,
             label=lp.label,
@@ -159,5 +175,10 @@ def parse_runtime_configs(env: dict) -> list[StrategyRuntimeConfig]:
             exit_on_opposite_signal=_bool_for(prefix, env, "EXIT_ON_OPPOSITE_SIGNAL", True),
             techniques=techniques,
             default_strategy=default_strategy,
+            market=market,
+            leverage=leverage,
+            risk_per_trade=risk_per_trade,
+            max_hold_hours=max_hold_hours,
+            reentry_cooldown_bars=reentry_cooldown_bars,
         ))
     return configs

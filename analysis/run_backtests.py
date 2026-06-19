@@ -24,6 +24,7 @@ from strategy.ml.dummy_model import DummyModel  # noqa: E402
 from strategy.rsi_macd import RsiMacdStrategy  # noqa: E402
 from strategy.bollinger_reversion import BollingerReversionStrategy  # noqa: E402
 from strategy.ema_cross import EmaCrossStrategy  # noqa: E402
+from strategy.supertrend import SupertrendStrategy  # noqa: E402
 from strategy.trend_pullback import TrendPullbackStrategy  # noqa: E402
 from strategy.liquidation_reversion import LiquidationReversionStrategy  # noqa: E402
 from strategy.regime import RegimeClassifier  # noqa: E402
@@ -63,6 +64,8 @@ def make_strategy(name: str):
         return BollingerReversionStrategy(ml_model=model)
     if name == "ema_cross":
         return EmaCrossStrategy(ml_model=model)
+    if name == "supertrend":
+        return SupertrendStrategy(ml_model=model)
     if name == "trend_pullback":
         return TrendPullbackStrategy(ml_model=model)
     if name == "liquidation_reversion":
@@ -72,7 +75,7 @@ def make_strategy(name: str):
 
 STRATEGY_NAMES = [
     "rsi_macd", "bollinger_reversion", "ema_cross",
-    "trend_pullback", "liquidation_reversion",
+    "supertrend", "trend_pullback", "liquidation_reversion",
 ]
 
 

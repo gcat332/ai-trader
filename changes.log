@@ -158,3 +158,152 @@ Summary of Changes: Added a pull-request GitHub Actions workflow that targets PR
 Validation: .venv/bin/python -m pytest tests/test_release_safety_workflow.py -q -> 2 passed. .venv/bin/python -m pytest tests/test_api.py tests/test_telegram.py tests/test_telegram_multiloop.py tests/test_telegram_health_monitor.py tests/test_reports_scheduler.py tests/test_trading_loop_daily_reset.py tests/test_go_live_safety.py tests/test_live_controller.py tests/test_shutdown_cleanup.py -q -> 83 passed, 1 warning.
 Notes for Next Agent: CAT-15 can now validate whether this PR gate coverage is sufficient as a required merge check. Spot testnet contract coverage is still manual for exchange/order-path changes.
 ---
+---
+Timestamp: 2026-06-19 17:34:29 +0700
+Agent: Codex
+Task: Implement Task 4 PaperFuturesExchange
+Files Modified: exchange/paper_futures.py, tests/test_paper_futures.py, changes.log
+Summary of Changes: Added the Task 4 paper futures exchange simulator with
+long/short position opening, isolated margin reservation, leverage-aware
+liquidation price calculation, entry slippage, reduce-only manual close support,
+and TP/SL tick handling without Task 5 liquidation behavior. Added the four brief-specified tests
+covering long margin reservation, short creation, entry slippage, and
+insufficient margin rejection.
+Validation: .venv/bin/python -m pytest tests/test_paper_futures.py -v -> 4
+passed. .venv/bin/python -m pytest -> failed only because local API_KEY caused 4
+pre-existing API endpoint tests to return 401. API_KEY= .venv/bin/python -m
+pytest -> 396 passed, 4 skipped, 1 warning.
+Notes for Next Agent: Task 5 can extend PaperFuturesExchange.tick() for TP/SL and
+liquidation; TradeRecord.exit_reason still only accepts TP, SL, and MANUAL in
+core.models for this task.
+---
+---
+Timestamp: 2026-06-19 18:14:00 +0700
+Agent: Codex
+Task: Implement Task 7 market-aware futures signal handling in engine.py
+Files Modified: core/engine.py, tests/test_engine.py, changes.log
+Summary of Changes: Added Engine futures configuration and bookkeeping for
+market-aware risk evaluation, futures SELL-as-short entries, reduce-only
+opposite-signal closes without same-bar flip, post-close re-entry cooldown, and
+max-hold time-stop closes. Added focused PaperFuturesExchange-backed engine
+tests for short entry, close-only opposite signals, cooldown blocking, and
+time-stop closure.
+Validation: .venv/bin/python -m pytest tests/test_engine.py -k 'futures or
+opposite_signal or cooldown or time_stop' -v -> 4 failed initially with
+Engine.__init__() got an unexpected keyword argument 'market', then 4 passed
+after implementation. .venv/bin/python -m pytest tests/test_engine.py -v -> 10
+passed, 1 warning.
+Notes for Next Agent: Futures behavior is gated on market='futures'; default
+spot behavior and LOOPn_* compatibility remain unchanged.
+---
+---
+Timestamp: 2026-06-19 18:23:34 +0700
+Agent: Codex
+Task: Fix Task 7 futures time-stop and strengthen engine tests
+Files Modified: core/engine.py, tests/test_engine.py, changes.log
+Summary of Changes: Lazy-seeded futures _opened_at when an existing position
+survives restart without in-memory open time, so max-hold aging resumes from
+the first observed bar instead of being bypassed forever. Extended engine tests
+for cooldown release, not-yet-expired time-stop behavior, engine-opened
+_opened_at population, and restart lazy-seeding.
+Validation: .venv/bin/python -m pytest tests/test_engine.py -v -> 13 passed,
+1 warning.
+Notes for Next Agent: Lazy-seed is intentionally futures-only and does not
+change spot behavior, close-only flip handling, cooldown logic, or leverage/RM
+code.
+---
+---
+Timestamp: 2026-06-19 18:29:52 +0700
+Agent: Codex
+Task: Wire per-loop PaperFuturesExchange for paper futures loops
+Files Modified: main.py, tests/test_main_wiring.py, changes.log
+Summary of Changes: Added main._build_paper_exchange_for(), wired paper loops to
+their own PaperExchange or PaperFuturesExchange instances, passed futures
+parameters only to paper futures Engine instances, and routed reconciliation,
+trading loops, and the API representative exchange through the per-loop exchange
+wiring while preserving live shared-Binance behavior.
+Validation: .venv/bin/python -m pytest tests/test_main_wiring.py -v -> failed
+first with ImportError for _build_paper_exchange_for, then 2 passed after
+implementation. .venv/bin/python -m pytest -q -> failed only because local
+API_KEY caused 4 pre-existing API endpoint tests to return 401. API_KEY=
+.venv/bin/python -m pytest -q -> 418 passed, 4 skipped, 1 warning.
+Notes for Next Agent: The exact full-suite command still depends on clearing a
+local API_KEY unless API auth tests are later isolated. Untracked package.json
+and package-lock.json were already present and were not modified.
+---
+Timestamp: 2026-06-19 18:49:52 +0700
+Agent: Codex
+Task: Fix Task 9 strategy selection ranking gates
+Files Modified: analysis/select_strategy.py, analysis/strategy_selection.json,
+tests/test_select_strategy.py, changes.log
+Summary of Changes: Changed strategy ranking to gate drawdown by absolute
+magnitude, added 30m candles to the 60-day selector run, lowered the CLI
+min_trades gate to 15 while preserving the rank_results default, and normalized
+reporter max_drawdown from USDT to an initial-balance fraction before ranking so
+max_dd=0.10 surfaces real candidates.
+Validation: .venv/bin/python -m pytest tests/test_select_strategy.py -v -> 4
+passed, 1 warning. .venv/bin/python -m analysis.select_strategy -> ranked 3
+strategies and regenerated analysis/strategy_selection.json.
+Notes for Next Agent: BacktestReporter remains unchanged and still emits
+quote-currency drawdown; analysis/select_strategy.py converts it for selection
+thresholds only. Existing untracked package.json and package-lock.json were not
+modified.
+---
+---
+Timestamp: 2026-06-19 19:03:21 +0700
+Agent: Codex
+Task: Implement Task 10 Supertrend bidirectional strategy
+Files Modified: strategy/supertrend.py, tests/test_supertrend.py,
+core/strategy_registry.py, analysis/run_backtests.py,
+analysis/select_strategy.py, analysis/strategy_selection.json, changes.log
+Summary of Changes: Added a minimal bidirectional Supertrend strategy with
+ATR-smoothed band carry-forward, bullish/bearish flip signals, futures-valid
+short TP/SL placement, registry build support, and selector/backtest wiring.
+Regenerated strategy_selection.json with Supertrend included in the ranked
+results.
+Validation: .venv/bin/python -m pytest tests/test_supertrend.py -v -> 3 passed,
+1 warning. .venv/bin/python -m analysis.select_strategy -> ranked Supertrend
+30m first with 25 trades, max_drawdown -0.0009, Sharpe 7.7213.
+Notes for Next Agent: Supertrend clears the §9 min_trades>=15 and
+abs(drawdown)<=0.10 filters on the cached 60-day 30m bench. Existing untracked
+package.json and package-lock.json were not modified.
+---
+---
+Timestamp: 2026-06-19 19:24:40 +0700
+Agent: Codex
+Task: Implement M1 futures-trading fixes C1 and C2
+Files Modified: core/trading_loop.py, core/live_outcome_tracker.py, tests/test_trading_loop_futures.py, changes.log
+Summary of Changes: Added pure mark_to_market_equity() so spot keeps quantity*mark
+equity while futures equity uses reserved margin plus side-aware unrealized PnL.
+Pumped PaperFuturesExchange.tick() after engine.process_candles() and before
+detect_closed, recorded owned tick-closed trades, and forgot those keys from
+LiveOutcomeTracker to prevent duplicate synthetic close records.
+Validation: .venv/bin/python -m pytest tests/test_trading_loop_futures.py -q -> 5
+passed, 1 warning. API_KEY= .venv/bin/python -m pytest -q -> 430 passed, 4
+skipped, 1 warning.
+Notes for Next Agent: The tick pump reuses the existing _mine ownership predicate
+for tick TradeRecords and position snapshots. Full-suite count is 430 passed
+because this task adds five tests; package.json and package-lock.json were already
+untracked and were not modified.
+---
+---
+Timestamp: 2026-06-19 19:31:50 +0700
+Agent: Codex
+Task: Fix futures SHORT position PnL sign in live_outcome_tracker.detect_closed
+Files Modified: core/live_outcome_tracker.py, core/trading_loop.py,
+tests/test_live_outcome_tracker.py, changes.log
+Summary of Changes: Stored position side in LiveOutcomeTracker previous-state
+tuples, used exchange.futures_math.realized_pnl() for side-aware synthetic close
+PnL, emitted SELL close records for LONG and BUY close records for SHORT, and
+added the requested leverage floor in mark_to_market_equity().
+Validation: .venv/bin/python -m pytest tests/test_live_outcome_tracker.py -k
+"test_detect_closed_long_pnl_unchanged or test_detect_closed_short_pnl_sign or
+test_detect_closed_short_profit" -v -> 3 passed after implementation, with the
+two SHORT tests failing first against the old long-only formula.
+.venv/bin/python -m pytest tests/test_live_outcome_tracker.py -v -> 7 passed.
+.venv/bin/python -m pytest tests/test_trading_loop_futures.py -q -> 5 passed,
+1 warning. .venv/bin/python -m pytest -q -> 433 passed, 4 skipped, 1 warning.
+Notes for Next Agent: Existing untracked package.json and package-lock.json were
+not modified. Long close PnL remains the same numerical formula via
+realized_pnl("LONG", entry, exit, qty).
+---

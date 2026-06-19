@@ -1,0 +1,42 @@
+[
+  {
+    "strategy": "supertrend",
+    "timeframe": "30m",
+    "total_pnl": 7.199980720097902,
+    "win_rate": 0.64,
+    "max_drawdown": -0.0008781664791488086,
+    "sharpe_ratio": 7.721270541730079,
+    "total_trades": 25,
+    "avg_pnl": 0.2879992288039161
+  },
+  {
+    "strategy": "ema_cross",
+    "timeframe": "30m",
+    "total_pnl": -0.27346026527733036,
+    "win_rate": 0.5,
+    "max_drawdown": -0.0017246215921979046,
+    "sharpe_ratio": -0.22870152230420812,
+    "total_trades": 30,
+    "avg_pnl": -0.009115342175911012
+  },
+  {
+    "strategy": "bollinger_reversion",
+    "timeframe": "1h",
+    "total_pnl": -90.40501088376973,
+    "win_rate": 0.21428571428571427,
+    "max_drawdown": -0.009040501088376972,
+    "sharpe_ratio": -64.74284301720202,
+    "total_trades": 28,
+    "avg_pnl": -3.228750388706062
+  },
+  {
+    "strategy": "bollinger_reversion",
+    "timeframe": "30m",
+    "total_pnl": -125.31809948088427,
+    "win_rate": 0.19148936170212766,
+    "max_drawdown": -0.013052490683867412,
+    "sharpe_ratio": -75.18464881259017,
+    "total_trades": 47,
+    "avg_pnl": -2.6663425421464737
+  }
+]

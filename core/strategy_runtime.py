@@ -24,6 +24,11 @@ class StrategyRuntimeConfig:
     exit_on_opposite_signal: bool = True
     techniques: tuple[str, ...] = ()
     default_strategy: str | None = None
+    market: str = "spot"
+    leverage: int = 1
+    risk_per_trade: float | None = None
+    max_hold_hours: float | None = None
+    reentry_cooldown_bars: int = 0
 
 
 class RuntimeStrategyAdapter:
