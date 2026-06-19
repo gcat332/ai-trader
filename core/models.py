@@ -29,6 +29,7 @@ class Order:
     exchange_order_id: str | None
     strategy_id: str = ""  # which sub-strategy placed it; tags clientOrderId so 2
     #                        strategies can share one spot account/symbol (plan B)
+    reduce_only: bool = False  # futures: marks a closing/reducing order; spot ignores it
 
 
 @dataclass
@@ -43,6 +44,8 @@ class Position:
     mode: Literal["SPOT", "FUTURES"]
     strategy_id: str = ""  # owning sub-strategy; lets one symbol hold independent
     #                        per-strategy positions with their own TP/SL (plan B)
+    leverage: int = 1                       # 1 = spot/no leverage
+    liquidation_price: float | None = None  # isolated-margin liq price; None for spot
 
 
 @dataclass
