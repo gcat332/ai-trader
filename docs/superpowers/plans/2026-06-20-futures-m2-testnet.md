@@ -532,7 +532,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `_ensure_symbol_config` (Task 5).
-- Produces: `place_order(order, current_price=0.0, stop_price=None) -> Order`. Opens with `positionSide="BOTH"`; exits (`order.reduce_only`) add `reduceOnly=True`. Rounds amount to step + validates min-notional (returns the order with `status="REJECTED"` and `quantity=0` if below min, so nothing naked is opened). A `-2022 ReduceOnly rejected` on an exit returns `status="FILLED"` (position already flat — idempotent, benign).
+- Produces: `place_order(order, current_price=0.0, stop_price=None) -> Order`. Opens with `positionSide="BOTH"`; exits (`order.reduce_only`) add `reduceOnly=True`. Rounds amount to step + validates min-notional (returns the order with `status="FAILED"` and `quantity=0` if below min, so nothing naked is opened; `"FAILED"` is the engine's reject sentinel — `engine.py` guards entry with `!= "FAILED"`). A `-2022 ReduceOnly rejected` on an exit returns `status="FILLED"` (position already flat — idempotent, benign).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -573,7 +573,7 @@ async def test_exit_is_reduce_only(fx_orders):
 async def test_below_min_notional_rejected_not_opened(fx_orders):
     # 0.00001 * 65000 = 0.65 USDT < 5.0 min -> never sent
     filled = await fx_orders.place_order(_order("BUY", 0.00001), current_price=65000.0)
-    assert filled.status == "REJECTED"
+    assert filled.status == "FAILED"
     assert filled.quantity == 0
     fx_orders._exchange.create_order.assert_not_called()
 
@@ -615,7 +615,7 @@ Replace the `place_order` stub:
         # Risk-first: a sub-min order would be silently rejected by Binance, leaving an
         # unprotected/half-entered state. Refuse it here instead.
         if not order.reduce_only and ref_px > 0 and amount * ref_px < self._min_notional(order.symbol):
-            filled.status = "REJECTED"
+            filled.status = "FAILED"  # engine reject sentinel (engine.py guards != "FAILED")
             filled.quantity = 0
             return filled
         params = {"positionSide": "BOTH", "newClientOrderId": order.id[:36]}
