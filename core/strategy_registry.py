@@ -6,16 +6,19 @@ from strategy.ml.dummy_model import DummyModel
 
 Getter = Callable[[str, str], str]
 
+STRATEGIES = [
+    "rsi_macd",
+    "bollinger_reversion",
+    "ema_cross",
+    "supertrend",
+    "trend_pullback",
+    "liquidation_reversion",
+]
+
 
 class StrategyRegistry:
     def available(self) -> list[str]:
-        return [
-            "rsi_macd",
-            "bollinger_reversion",
-            "ema_cross",
-            "trend_pullback",
-            "liquidation_reversion",
-        ]
+        return list(STRATEGIES)
 
     def build(self, name: str, get: Getter, ml_model=None) -> BaseStrategy:
         ml = ml_model or DummyModel(confidence=float(get("ML_CONFIDENCE", "0.75")))
@@ -25,6 +28,9 @@ class StrategyRegistry:
         if name == "ema_cross":
             from strategy.ema_cross import EmaCrossStrategy
             return EmaCrossStrategy(ml_model=ml, atr_sl_mult=sl, atr_tp_mult=tp)
+        if name == "supertrend":
+            from strategy.supertrend import SupertrendStrategy
+            return SupertrendStrategy(ml_model=ml, atr_sl_mult=sl, atr_tp_mult=tp)
         if name == "rsi_macd":
             from strategy.rsi_macd import RsiMacdStrategy
             trend_ema = int(get("RSI_MACD_TREND_EMA", "200"))

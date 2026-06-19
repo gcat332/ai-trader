@@ -231,3 +231,40 @@ Notes for Next Agent: The exact full-suite command still depends on clearing a
 local API_KEY unless API auth tests are later isolated. Untracked package.json
 and package-lock.json were already present and were not modified.
 ---
+Timestamp: 2026-06-19 18:49:52 +0700
+Agent: Codex
+Task: Fix Task 9 strategy selection ranking gates
+Files Modified: analysis/select_strategy.py, analysis/strategy_selection.json,
+tests/test_select_strategy.py, changes.log
+Summary of Changes: Changed strategy ranking to gate drawdown by absolute
+magnitude, added 30m candles to the 60-day selector run, lowered the CLI
+min_trades gate to 15 while preserving the rank_results default, and normalized
+reporter max_drawdown from USDT to an initial-balance fraction before ranking so
+max_dd=0.10 surfaces real candidates.
+Validation: .venv/bin/python -m pytest tests/test_select_strategy.py -v -> 4
+passed, 1 warning. .venv/bin/python -m analysis.select_strategy -> ranked 3
+strategies and regenerated analysis/strategy_selection.json.
+Notes for Next Agent: BacktestReporter remains unchanged and still emits
+quote-currency drawdown; analysis/select_strategy.py converts it for selection
+thresholds only. Existing untracked package.json and package-lock.json were not
+modified.
+---
+---
+Timestamp: 2026-06-19 19:03:21 +0700
+Agent: Codex
+Task: Implement Task 10 Supertrend bidirectional strategy
+Files Modified: strategy/supertrend.py, tests/test_supertrend.py,
+core/strategy_registry.py, analysis/run_backtests.py,
+analysis/select_strategy.py, analysis/strategy_selection.json, changes.log
+Summary of Changes: Added a minimal bidirectional Supertrend strategy with
+ATR-smoothed band carry-forward, bullish/bearish flip signals, futures-valid
+short TP/SL placement, registry build support, and selector/backtest wiring.
+Regenerated strategy_selection.json with Supertrend included in the ranked
+results.
+Validation: .venv/bin/python -m pytest tests/test_supertrend.py -v -> 3 passed,
+1 warning. .venv/bin/python -m analysis.select_strategy -> ranked Supertrend
+30m first with 25 trades, max_drawdown -0.0009, Sharpe 7.7213.
+Notes for Next Agent: Supertrend clears the §9 min_trades>=15 and
+abs(drawdown)<=0.10 filters on the cached 60-day 30m bench. Existing untracked
+package.json and package-lock.json were not modified.
+---

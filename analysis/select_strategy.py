@@ -14,6 +14,7 @@ RULE_STRATEGIES = [
     "rsi_macd",
     "bollinger_reversion",
     "ema_cross",
+    "supertrend",
     "trend_pullback",
     "liquidation_reversion",
 ]

@@ -1,5 +1,15 @@
 [
   {
+    "strategy": "supertrend",
+    "timeframe": "30m",
+    "total_pnl": 7.199980720097902,
+    "win_rate": 0.64,
+    "max_drawdown": -0.0008781664791488086,
+    "sharpe_ratio": 7.721270541730079,
+    "total_trades": 25,
+    "avg_pnl": 0.2879992288039161
+  },
+  {
     "strategy": "ema_cross",
     "timeframe": "30m",
     "total_pnl": -0.27346026527733036,
