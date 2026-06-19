@@ -132,10 +132,51 @@ class BinanceFuturesExchange(Exchange):
 
     async def protect_position(self, symbol, side, quantity, take_profit, stop_loss,
                                current_price=0.0, strategy_id="") -> Order | None:
-        raise NotImplementedError  # Task 7
+        """closePosition=true STOP + TP brackets. Stop goes first and on MARK price so
+        the bot's stop and the liquidation engine read the same price; if the stop fails
+        to place we do NOT sit naked — we market-close immediately and re-raise."""
+        if stop_loss is None:
+            return None
+        exit_side = "sell" if side.upper() == "BUY" else "buy"
+        # STOP first.
+        try:
+            stop = await self._exchange.create_order(
+                symbol=symbol, type="STOP_MARKET", side=exit_side, amount=None, price=None,
+                params={"closePosition": True, "workingType": "MARK_PRICE",
+                        "stopPrice": self._exchange.price_to_precision(symbol, stop_loss),
+                        "positionSide": "BOTH"},
+            )
+        except Exception:
+            emergency = Order(id=f"emg-{symbol}", symbol=symbol,
+                              side="SELL" if side.upper() == "BUY" else "BUY",
+                              type="MARKET", quantity=quantity, price=None,
+                              status="PENDING", exchange_order_id=None,
+                              reduce_only=True, strategy_id=strategy_id)
+            await self.place_order(emergency, current_price=current_price)
+            raise
+        protective = Order(id=f"stop-{symbol}", symbol=symbol,
+                           side="SELL" if side.upper() == "BUY" else "BUY",
+                           type="STOP_MARKET", quantity=quantity, price=stop_loss,
+                           status="OPEN", exchange_order_id=str(stop.get("id", "")),
+                           reduce_only=True, strategy_id=strategy_id)
+        # TP second — non-fatal; the stop already protects the downside.
+        if take_profit is not None:
+            try:
+                await self._exchange.create_order(
+                    symbol=symbol, type="TAKE_PROFIT_MARKET", side=exit_side, amount=None, price=None,
+                    params={"closePosition": True, "workingType": "MARK_PRICE",
+                            "stopPrice": self._exchange.price_to_precision(symbol, take_profit),
+                            "positionSide": "BOTH"},
+                )
+            except Exception:
+                pass
+        return protective
 
     async def cancel_order(self, order_id: str, symbol: str) -> None:
-        raise NotImplementedError  # Task 7
+        try:
+            await self._exchange.cancel_order(order_id, symbol)
+        except Exception:
+            pass  # already filled/canceled — benign
 
     async def get_positions(self) -> list[Position]:
         raise NotImplementedError  # Task 8

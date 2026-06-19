@@ -34,6 +34,53 @@ def fx_orders(fx):
     return fx
 
 
+@pytest.fixture
+def fx_protect(fx_orders):
+    fx_orders._exchange.create_order = AsyncMock(side_effect=[
+        {"id": "stop-1", "status": "open"},   # STOP_MARKET placed first
+        {"id": "tp-1", "status": "open"},      # TAKE_PROFIT_MARKET second
+    ])
+    fx_orders._exchange.price_to_precision = MagicMock(side_effect=lambda s, p: p)
+    return fx_orders
+
+@pytest.mark.asyncio
+async def test_protect_places_stop_first_with_mark_and_closeposition(fx_protect):
+    prot = await fx_protect.protect_position("BTC/USDT", side="BUY", quantity=0.01,
+                                             take_profit=66000.0, stop_loss=64000.0, current_price=65000.0)
+    first = fx_protect._exchange.create_order.call_args_list[0]
+    assert first.kwargs["type"] == "STOP_MARKET"
+    assert first.kwargs["side"] == "sell"            # exit side of a long
+    assert first.kwargs["params"]["closePosition"] is True
+    assert first.kwargs["params"]["workingType"] == "MARK_PRICE"
+    assert first.kwargs["params"]["stopPrice"] == 64000.0
+    second = fx_protect._exchange.create_order.call_args_list[1]
+    assert second.kwargs["type"] == "TAKE_PROFIT_MARKET"
+    assert prot.exchange_order_id == "stop-1"
+
+@pytest.mark.asyncio
+async def test_stop_failure_triggers_emergency_close(fx_protect):
+    fx_protect._exchange.create_order = AsyncMock(side_effect=Exception("stop rejected"))
+    # spy the reduce-only market close
+    closes = []
+    orig = fx_protect.place_order
+    async def spy(order, **kw):
+        if order.reduce_only:
+            closes.append(order)
+            return order
+        return await orig(order, **kw)
+    fx_protect.place_order = spy
+    with pytest.raises(Exception):
+        await fx_protect.protect_position("BTC/USDT", side="BUY", quantity=0.01,
+                                          take_profit=None, stop_loss=64000.0, current_price=65000.0)
+    assert closes and closes[0].reduce_only and closes[0].side == "SELL"
+
+@pytest.mark.asyncio
+async def test_short_protect_exit_side_is_buy(fx_protect):
+    prot = await fx_protect.protect_position("BTC/USDT", side="SELL", quantity=0.01,
+                                             take_profit=64000.0, stop_loss=66000.0, current_price=65000.0)
+    assert fx_protect._exchange.create_order.call_args_list[0].kwargs["side"] == "buy"
+
+
 @pytest.mark.asyncio
 async def test_open_long_market(fx_orders):
     filled = await fx_orders.place_order(_order("BUY", 0.01), current_price=65000.0)
