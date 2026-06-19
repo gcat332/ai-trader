@@ -14,6 +14,7 @@ def test_registry_lists_available_strategy_names():
         "rsi_macd",
         "bollinger_reversion",
         "ema_cross",
+        "supertrend",
         "trend_pullback",
         "liquidation_reversion",
     ]

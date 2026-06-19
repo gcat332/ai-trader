@@ -158,7 +158,7 @@ async def test_available_strategies_lists_all_techniques(client):
     resp = await client.get("/api/strategies/available")
     assert resp.status_code == 200
     assert set(resp.json()) == {
-        "rsi_macd", "bollinger_reversion", "ema_cross",
+        "rsi_macd", "bollinger_reversion", "ema_cross", "supertrend",
         "trend_pullback", "liquidation_reversion",
     }
 
