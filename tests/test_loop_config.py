@@ -1,6 +1,7 @@
 """Stage 4: parse LOOPn_* env blocks into independent loop configs so two
 strategies run concurrently, each configured from its own .env section."""
 from core.loop_config import parse_loops
+from core.loop_config import parse_runtime_configs
 
 
 def test_no_loops_when_env_empty():
@@ -51,3 +52,36 @@ def test_parse_loop_preserves_label_and_strategy_settings():
 
 def test_loop_parser_keeps_legacy_single_loop_when_no_loop_strategy():
     assert parse_loops({"STRATEGY_MODE": "multi", "TRADING_SYMBOL": "BTC/USDT"}) == []
+
+
+def test_futures_loop_parsed():
+    env = {
+        "LOOP1_STRATEGY": "rsi_macd", "LOOP1_MODE": "PAPER",
+        "LOOP1_MARKET": "futures", "LOOP1_LEVERAGE": "3",
+        "LOOP1_RISK_PER_TRADE": "0.005", "LOOP1_MAX_HOLD_HOURS": "48",
+        "LOOP1_REENTRY_COOLDOWN_BARS": "1",
+    }
+    cfgs = parse_runtime_configs(env)
+    cfg = next(c for c in cfgs if c.loop_id != "legacy")
+    assert cfg.market == "futures"
+    assert cfg.leverage == 3
+    assert cfg.risk_per_trade == 0.005
+    assert cfg.max_hold_hours == 48.0
+    assert cfg.reentry_cooldown_bars == 1
+
+
+def test_spot_defaults_when_unset():
+    env = {"LOOP1_STRATEGY": "rsi_macd", "LOOP1_MODE": "PAPER"}
+    cfg = next(c for c in parse_runtime_configs(env) if c.loop_id != "legacy")
+    assert cfg.market == "spot"
+    assert cfg.leverage == 1
+    assert cfg.risk_per_trade is None
+    assert cfg.reentry_cooldown_bars == 0
+
+
+def test_leverage_above_one_requires_futures():
+    import pytest
+    env = {"LOOP1_STRATEGY": "rsi_macd", "LOOP1_MODE": "PAPER",
+           "LOOP1_MARKET": "spot", "LOOP1_LEVERAGE": "3"}
+    with pytest.raises(ValueError, match="leverage"):
+        parse_runtime_configs(env)
