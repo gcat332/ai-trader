@@ -1,7 +1,7 @@
 import uuid
 from core.models import Order, Position, TradeRecord
 from exchange.base import Exchange
-from exchange.futures_math import liquidation_price, realized_pnl
+from exchange.futures_math import MMR_DEFAULT, liquidation_price, realized_pnl
 
 
 class PaperFuturesExchange(Exchange):
@@ -9,7 +9,7 @@ class PaperFuturesExchange(Exchange):
     slippage, liquidation. Candles are fed via tick(); no network."""
 
     def __init__(self, initial_balance: dict[str, float], leverage: int = 1,
-                 slippage_bps: float = 1.0, mmr: float = 0.005, fee_rate: float = 0.0004):
+                 slippage_bps: float = 1.0, mmr: float = MMR_DEFAULT, fee_rate: float = 0.0004):
         self._balance = dict(initial_balance)
         self._leverage = leverage
         self._slippage = slippage_bps / 10000.0

@@ -1,7 +1,7 @@
 # risk/manager.py
 import uuid
 from core.models import Order
-from exchange.futures_math import liquidation_price
+from exchange.futures_math import MMR_DEFAULT, liquidation_price
 
 
 class RiskManager:
@@ -89,7 +89,7 @@ class RiskManager:
         market="spot",
         leverage=1,
         risk_per_trade=None,
-        mmr=0.005,
+        mmr=MMR_DEFAULT,
         liq_buffer_pct=0.0,
     ) -> Order | None:
         self._last_rejection_reason = None
