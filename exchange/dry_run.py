@@ -54,6 +54,26 @@ class DryRunExchange(Exchange):
                      quantity=quantity, price=stop_loss, status="OPEN",
                      exchange_order_id=f"dry-stop-{symbol}", reduce_only=True, strategy_id=strategy_id)
 
+    async def partial_take_profit(self, symbol, side, quantity, current_price=0.0):
+        logger.warning("DRY-RUN: WOULD partial-TP %s side=%s qty=%s", symbol, side, quantity)
+        return Order(id=f"dry-ptp-{symbol}", symbol=symbol,
+                     side="SELL" if str(side).upper() == "LONG" else "BUY", type="MARKET",
+                     quantity=quantity, price=None, status="FILLED",
+                     exchange_order_id=f"dry-ptp-{symbol}", reduce_only=True)
+
+    async def move_stop_to_breakeven(self, symbol, side, quantity, entry_price, old_stop_order_id):
+        logger.warning("DRY-RUN: WOULD move stop to breakeven %s @%s", symbol, entry_price)
+        return Order(id=f"dry-be-{symbol}", symbol=symbol,
+                     side="SELL" if str(side).upper() == "LONG" else "BUY", type="STOP_MARKET",
+                     quantity=quantity, price=entry_price, status="OPEN",
+                     exchange_order_id=f"dry-be-{symbol}", reduce_only=True)
+
+    async def maintenance_margin_rate(self, symbol) -> float:
+        if hasattr(self._wrapped, "maintenance_margin_rate"):
+            return await self._wrapped.maintenance_margin_rate(symbol)
+        from exchange.futures_math import MMR_DEFAULT
+        return MMR_DEFAULT
+
     async def cancel_order(self, order_id, symbol) -> None:
         logger.warning("DRY-RUN: WOULD cancel %s on %s", order_id, symbol)
 

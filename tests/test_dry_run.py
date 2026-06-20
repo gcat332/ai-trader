@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from core.models import Order
 from exchange.dry_run import DryRunExchange
+from exchange.futures_math import MMR_DEFAULT
 
 def _order(side="BUY", qty=0.01, reduce_only=False):
     return Order(id="o1", symbol="BTC/USDT", side=side, type="MARKET", quantity=qty,
@@ -18,6 +19,8 @@ def wrapped():
     w.place_order = AsyncMock()
     w.protect_position = AsyncMock()
     w.cancel_order = AsyncMock()
+    w.partial_take_profit = AsyncMock()
+    w.move_stop_to_breakeven = AsyncMock()
     return w
 
 @pytest.mark.asyncio
@@ -43,3 +46,65 @@ async def test_protect_and_cancel_do_not_touch_wrapped(wrapped):
     await dr.cancel_order("x", "BTC/USDT")
     wrapped.protect_position.assert_not_awaited()
     wrapped.cancel_order.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_partial_take_profit_does_not_touch_wrapped(wrapped, caplog):
+    dr = DryRunExchange(wrapped)
+
+    with caplog.at_level(logging.WARNING):
+        order = await dr.partial_take_profit("BTC/USDT", "LONG", 0.005, current_price=65000.0)
+
+    wrapped.partial_take_profit.assert_not_awaited()
+    assert order == Order(
+        id="dry-ptp-BTC/USDT",
+        symbol="BTC/USDT",
+        side="SELL",
+        type="MARKET",
+        quantity=0.005,
+        price=None,
+        status="FILLED",
+        exchange_order_id="dry-ptp-BTC/USDT",
+        reduce_only=True,
+    )
+    assert "WOULD" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_move_stop_to_breakeven_does_not_touch_wrapped(wrapped, caplog):
+    dr = DryRunExchange(wrapped)
+
+    with caplog.at_level(logging.WARNING):
+        order = await dr.move_stop_to_breakeven(
+            "BTC/USDT", "LONG", 0.005, 65000.0, "old-stop"
+        )
+
+    wrapped.move_stop_to_breakeven.assert_not_awaited()
+    assert order == Order(
+        id="dry-be-BTC/USDT",
+        symbol="BTC/USDT",
+        side="SELL",
+        type="STOP_MARKET",
+        quantity=0.005,
+        price=65000.0,
+        status="OPEN",
+        exchange_order_id="dry-be-BTC/USDT",
+        reduce_only=True,
+    )
+    assert "WOULD" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_maintenance_margin_rate_delegates_when_wrapped_has_method(wrapped):
+    wrapped.maintenance_margin_rate = AsyncMock(return_value=0.012)
+    dr = DryRunExchange(wrapped)
+
+    assert await dr.maintenance_margin_rate("BTC/USDT") == 0.012
+    wrapped.maintenance_margin_rate.assert_awaited_once_with("BTC/USDT")
+
+
+@pytest.mark.asyncio
+async def test_maintenance_margin_rate_falls_back_when_wrapped_has_no_method(wrapped):
+    del wrapped.maintenance_margin_rate
+    dr = DryRunExchange(wrapped)
+
+    assert await dr.maintenance_margin_rate("BTC/USDT") == MMR_DEFAULT
