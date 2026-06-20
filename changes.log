@@ -382,3 +382,21 @@ only the new slippage_pad tightens the guard toward the slippage-adjusted
 liquidation side. Existing untracked package.json and package-lock.json were not
 modified.
 ---
+---
+Timestamp: 2026-06-20 14:20:02 +0700
+Agent: Codex
+Task: Implement Futures M3 Task 8 adapter partial-TP and breakeven stop move
+Files Modified: exchange/binance_futures.py, exchange/paper_futures.py, tests/test_binance_futures_exchange.py, tests/test_paper_futures.py, .superpowers/sdd/task-8-report.md, changes.log
+Summary of Changes: Added Binance futures sized reduce-only partial take-profit orders without closePosition and never-naked breakeven stop replacement that creates the new STOP before cancelling the old stop. Added paper futures equivalents for partial position realization and breakeven stop tracking. Added focused TDD coverage for order params, exit side, call order, create-failure no-cancel behavior, partial paper TradeRecord booking, and stop reset.
+Validation: .venv/bin/python -m pytest tests/test_binance_futures_exchange.py tests/test_paper_futures.py -q -> 43 passed. .venv/bin/python -m pytest -q -> 512 passed, 6 skipped, 1 warning.
+Notes for Next Agent: Pre-existing untracked package.json and package-lock.json were not modified or staged. Partial take-profit intentionally never sets closePosition; breakeven stop replacement intentionally leaves the old stop in place if new stop placement raises.
+---
+---
+Timestamp: 2026-06-20 14:20:02 +0700
+Agent: Codex
+Task: Commit Futures M3 Task 8
+Files Modified: .superpowers/sdd/task-8-report.md, changes.log
+Summary of Changes: Updated the Task 8 report to record that implementation and tests completed but Git staging/commit is blocked.
+Validation: Git staging failed before commit with `fatal: Unable to create '.git/index.lock': Operation not permitted`.
+Notes for Next Agent: Working-tree files are left on disk unstaged. Retry staging/commit from an environment with write access to `.git`; expected commit message is `feat(futures): sized reduce-only partial-TP + never-naked breakeven stop move` with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
+---

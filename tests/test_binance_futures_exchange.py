@@ -76,6 +76,92 @@ def fx_protect(fx_orders):
     fx_orders._exchange.price_to_precision = MagicMock(side_effect=lambda s, p: p)
     return fx_orders
 
+
+@pytest.mark.asyncio
+async def test_partial_take_profit_is_sized_reduce_only(fx_orders):
+    order = await fx_orders.partial_take_profit(
+        "BTC/USDT", side="LONG", quantity=0.005, current_price=66000.0
+    )
+
+    _, kwargs = fx_orders._exchange.create_order.call_args
+    assert kwargs["type"] == "market"
+    assert kwargs["side"] == "sell"
+    assert kwargs["amount"] == 0.005
+    assert kwargs["params"]["reduceOnly"] is True
+    assert kwargs["params"]["positionSide"] == "BOTH"
+    assert "closePosition" not in kwargs["params"]
+    assert order.side == "SELL"
+    assert order.quantity == 0.005
+    assert order.reduce_only is True
+
+
+@pytest.mark.asyncio
+async def test_partial_take_profit_short_exit_side_is_buy(fx_orders):
+    await fx_orders.partial_take_profit(
+        "BTC/USDT", side="SHORT", quantity=0.005, current_price=64000.0
+    )
+
+    _, kwargs = fx_orders._exchange.create_order.call_args
+    assert kwargs["side"] == "buy"
+    assert kwargs["amount"] == 0.005
+    assert "closePosition" not in kwargs["params"]
+
+
+@pytest.mark.asyncio
+async def test_move_stop_to_breakeven_places_new_stop_before_cancel(fx_protect):
+    calls = []
+
+    async def create_stop(**kwargs):
+        calls.append(("create", kwargs))
+        return {"id": "be-1", "status": "open"}
+
+    async def cancel_stop(*args):
+        calls.append(("cancel", args))
+        return None
+
+    fx_protect._exchange.create_order = AsyncMock(side_effect=create_stop)
+    fx_protect._exchange.cancel_order = AsyncMock(side_effect=cancel_stop)
+
+    order = await fx_protect.move_stop_to_breakeven(
+        "BTC/USDT",
+        side="LONG",
+        quantity=0.005,
+        entry_price=65000.0,
+        old_stop_order_id="old-1",
+    )
+
+    assert [call[0] for call in calls] == ["create", "cancel"]
+    create_kwargs = calls[0][1]
+    assert create_kwargs["type"] == "STOP_MARKET"
+    assert create_kwargs["side"] == "sell"
+    assert create_kwargs["amount"] is None
+    assert create_kwargs["params"]["closePosition"] is True
+    assert create_kwargs["params"]["workingType"] == "MARK_PRICE"
+    assert create_kwargs["params"]["positionSide"] == "BOTH"
+    assert create_kwargs["params"]["stopPrice"] == 65000.0
+    assert calls[1][1] == ("old-1", "BTC/USDT")
+    assert order.exchange_order_id == "be-1"
+    assert order.price == 65000.0
+    assert order.reduce_only is True
+
+
+@pytest.mark.asyncio
+async def test_move_stop_to_breakeven_does_not_cancel_if_new_stop_fails(fx_protect):
+    fx_protect._exchange.create_order = AsyncMock(side_effect=Exception("stop rejected"))
+    fx_protect._exchange.cancel_order = AsyncMock()
+
+    with pytest.raises(Exception, match="stop rejected"):
+        await fx_protect.move_stop_to_breakeven(
+            "BTC/USDT",
+            side="LONG",
+            quantity=0.005,
+            entry_price=65000.0,
+            old_stop_order_id="old-1",
+        )
+
+    fx_protect._exchange.cancel_order.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_get_positions_uses_exchange_liquidation_price(fx):
     fx._exchange.fetch_positions = AsyncMock(return_value=[

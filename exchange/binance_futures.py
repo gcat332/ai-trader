@@ -211,6 +211,59 @@ class BinanceFuturesExchange(Exchange):
                 pass
         return protective
 
+    async def partial_take_profit(self, symbol, side, quantity, current_price=0.0) -> Order:
+        exit_side = "sell" if side.upper() == "LONG" else "buy"
+        amount = self._round_amount(symbol, quantity)
+        result = await self._exchange.create_order(
+            symbol=symbol,
+            type="market",
+            side=exit_side,
+            amount=amount,
+            price=None,
+            params={"reduceOnly": True, "positionSide": "BOTH"},
+        )
+        return Order(
+            id=f"ptp-{symbol}",
+            symbol=symbol,
+            side=exit_side.upper(),
+            type="MARKET",
+            quantity=amount,
+            price=None,
+            status="FILLED" if result.get("status") == "closed" else "OPEN",
+            exchange_order_id=str(result.get("id", "")),
+            reduce_only=True,
+        )
+
+    async def move_stop_to_breakeven(self, symbol, side, quantity, entry_price,
+                                     old_stop_order_id) -> Order:
+        exit_side = "sell" if side.upper() == "LONG" else "buy"
+        new_stop = await self._exchange.create_order(
+            symbol=symbol,
+            type="STOP_MARKET",
+            side=exit_side,
+            amount=None,
+            price=None,
+            params={
+                "closePosition": True,
+                "workingType": "MARK_PRICE",
+                "positionSide": "BOTH",
+                "stopPrice": entry_price,
+            },
+        )
+        if old_stop_order_id:
+            await self.cancel_order(old_stop_order_id, symbol)
+        return Order(
+            id=f"be-{symbol}",
+            symbol=symbol,
+            side=exit_side.upper(),
+            type="STOP_MARKET",
+            quantity=quantity,
+            price=entry_price,
+            status="OPEN",
+            exchange_order_id=str(new_stop.get("id", "")),
+            reduce_only=True,
+        )
+
     async def cancel_order(self, order_id: str, symbol: str) -> None:
         try:
             await self._exchange.cancel_order(order_id, symbol)

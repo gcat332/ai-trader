@@ -86,3 +86,48 @@ async def test_liquidation_takes_precedence():
                               stop_loss=60.0, strategy_id="s1")
     closed = ex.tick("BTC/USDT", high=70.0, low=50.0, close=55.0)
     assert closed[0].exit_reason == "LIQUIDATION"
+
+
+@pytest.mark.asyncio
+async def test_partial_take_profit_reduces_position_and_books_partial_trade():
+    ex = PaperFuturesExchange({"USDT": 1000.0}, leverage=2, slippage_bps=0.0)
+    await ex.place_order(_order("BUY", 1.0), current_price=100.0)
+
+    order = await ex.partial_take_profit(
+        "BTC/USDT", side="LONG", quantity=0.4, current_price=110.0
+    )
+
+    pos = (await ex.get_positions())[0]
+    assert pos.quantity == pytest.approx(0.6)
+    assert len(ex.closed_trades) == 1
+    trade = ex.closed_trades[0]
+    assert trade.quantity == pytest.approx(0.4)
+    assert trade.side == "SELL"
+    assert trade.exit_reason == "TP"
+    assert trade.realized_pnl == pytest.approx(4.0, abs=0.01)
+    assert order.side == "SELL"
+    assert order.quantity == pytest.approx(0.4)
+    assert order.reduce_only is True
+
+
+@pytest.mark.asyncio
+async def test_move_stop_to_breakeven_resets_position_stop_to_entry_price():
+    ex = PaperFuturesExchange({"USDT": 1000.0}, leverage=2, slippage_bps=0.0)
+    await ex.place_order(_order("SELL", 1.0), current_price=100.0)
+    await ex.protect_position("BTC/USDT", "SELL", 1.0, take_profit=90.0,
+                              stop_loss=105.0, strategy_id="s1")
+
+    order = await ex.move_stop_to_breakeven(
+        "BTC/USDT",
+        side="SHORT",
+        quantity=1.0,
+        entry_price=100.0,
+        old_stop_order_id="old-1",
+    )
+
+    pos = (await ex.get_positions())[0]
+    assert pos.stop_loss == 100.0
+    assert order.side == "BUY"
+    assert order.type == "STOP_MARKET"
+    assert order.price == 100.0
+    assert order.reduce_only is True
