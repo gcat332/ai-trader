@@ -666,6 +666,75 @@ async def test_engine_calls_liq_buffer_after_open():
 
 
 @pytest.mark.asyncio
+async def test_partial_tp_triggers_once_at_tp1_then_breakeven():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
+    exchange.partial_take_profit = AsyncMock(wraps=exchange.partial_take_profit)
+    exchange.move_stop_to_breakeven = AsyncMock(wraps=exchange.move_stop_to_breakeven)
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_partial_tp"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=RiskManager(),
+        market="futures",
+        leverage=2,
+        partial_tp_pct=0.5,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+    opened_qty = (await exchange.get_positions())[0].quantity
+    engine.strategy = AlwaysHoldStrategy(strategy_id="futures_partial_tp")
+
+    await engine.process_candles([
+        [1700003600000, 65000.0, 67100.0, 64500.0, 66800.0, 100.0],
+    ])
+
+    exchange.partial_take_profit.assert_awaited_once()
+    assert exchange.partial_take_profit.await_args.args[:2] == ("BTC/USDT", "LONG")
+    assert exchange.partial_take_profit.await_args.args[2] == pytest.approx(opened_qty * 0.5)
+    exchange.move_stop_to_breakeven.assert_awaited_once()
+    assert exchange.move_stop_to_breakeven.await_args.args[:2] == ("BTC/USDT", "LONG")
+    assert exchange.move_stop_to_breakeven.await_args.args[2] == pytest.approx(opened_qty * 0.5)
+
+    await engine.process_candles([
+        [1700007200000, 66800.0, 67200.0, 66000.0, 67100.0, 100.0],
+    ])
+
+    exchange.partial_take_profit.assert_awaited_once()
+    exchange.move_stop_to_breakeven.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_partial_tp_off_by_default():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
+    exchange.partial_take_profit = AsyncMock(wraps=exchange.partial_take_profit)
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_partial_tp_off"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=RiskManager(),
+        market="futures",
+        leverage=2,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+    engine.strategy = AlwaysHoldStrategy(strategy_id="futures_partial_tp_off")
+
+    await engine.process_candles([
+        [1700003600000, 65000.0, 67100.0, 64500.0, 66800.0, 100.0],
+    ])
+
+    exchange.partial_take_profit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_spot_engine_does_not_fetch_funding(paper_exchange):
     paper_exchange.fetch_funding_rate = AsyncMock(return_value=0.0012)
     paper_exchange.enforce_liquidation_buffer = AsyncMock(return_value="ok")

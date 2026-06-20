@@ -400,3 +400,24 @@ Summary of Changes: Updated the Task 8 report to record that implementation and 
 Validation: Git staging failed before commit with `fatal: Unable to create '.git/index.lock': Operation not permitted`.
 Notes for Next Agent: Working-tree files are left on disk unstaged. Retry staging/commit from an environment with write access to `.git`; expected commit message is `feat(futures): sized reduce-only partial-TP + never-naked breakeven stop move` with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 ---
+---
+Timestamp: 2026-06-20 14:29:09 +0700
+Agent: Codex
+Task: Implement Futures M3 Task 9 engine partial TP at TP1 plus breakeven stop
+Files Modified: core/engine.py, tests/test_engine.py, .superpowers/sdd/task-9-report.md, changes.log
+Summary of Changes: Added default-off Engine partial_tp_pct configuration and
+futures-only state for one-shot partial take profit at TP1. The engine now
+stashes TP1 and stop-order metadata after futures entries are protected, invokes
+partial_take_profit plus move_stop_to_breakeven once when a held futures position
+reaches TP1, and clears the state when the engine closes the futures position.
+Added regression tests for the enabled one-shot path and the default-off path.
+Validation: Red phase .venv/bin/python -m pytest tests/test_engine.py -q -> 1
+failed, 22 passed, 1 warning, failing because Engine lacked partial_tp_pct.
+Green phase .venv/bin/python -m pytest tests/test_engine.py -q -> 23 passed, 1
+warning. Full suite .venv/bin/python -m pytest -q -> 514 passed, 6 skipped, 1
+warning.
+Notes for Next Agent: The checked-in .superpowers/sdd/task-9-brief.md is stale
+and describes a different liquidation-buffer task; this entry follows the newest
+user request. Pre-existing untracked package.json and package-lock.json were not
+modified or staged.
+---
