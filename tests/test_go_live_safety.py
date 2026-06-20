@@ -33,6 +33,28 @@ def test_live_runtime_requires_explicit_live_enable_flag():
         )
 
 
+def test_live_futures_runtime_still_blocked_without_live_trading_enabled():
+    # M3 must NOT have armed real money: a LIVE futures runtime with
+    # LIVE_TRADING_ENABLED unset must still raise the arm-live error.
+    from main import _validate_go_live_safety
+
+    configs = parse_runtime_configs({
+        "PAPER_TRADING": "true",
+        "LOOP1_STRATEGY": "ema_cross",
+        "LOOP1_MODE": "LIVE",
+        "LOOP1_MARKET": "futures",
+    })
+
+    with pytest.raises(ValueError, match="LIVE_TRADING_ENABLED=true"):
+        _validate_go_live_safety(
+            runtime_configs=configs,
+            settings=_settings(),
+            live_trading_enabled=False,
+            api_host="127.0.0.1",
+            api_key="",
+        )
+
+
 def test_live_runtime_validates_credentials_when_enabled():
     from main import _validate_go_live_safety
 
