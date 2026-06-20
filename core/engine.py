@@ -307,14 +307,21 @@ class Engine:
                             qty,
                             current_price,
                         )
-                        await self.exchange.move_stop_to_breakeven(
-                            self.symbol,
-                            held.side,
-                            remaining_qty,
-                            held.entry_price,
-                            self._stop_order_id.get(self.symbol),
-                        )
                         self._partial_done.add(self.symbol)
+                        try:
+                            await self.exchange.move_stop_to_breakeven(
+                                self.symbol,
+                                held.side,
+                                remaining_qty,
+                                held.entry_price,
+                                self._stop_order_id.get(self.symbol),
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "breakeven stop move failed on %s: %s",
+                                self.symbol,
+                                exc,
+                            )
             if await self._close_expired_futures_position(
                 signal,
                 futures_positions,
@@ -367,17 +374,17 @@ class Engine:
                 balance = self._allocation_manager.scoped_balance(self._loop_id, balance)
             positions = await self.exchange.get_positions()
             funding_rate = 0.0
-            if self._market == 'futures':
+            mmr = MMR_DEFAULT
+            if self._market == "futures":
                 try:
                     funding_rate = await self.exchange.fetch_funding_rate(self.symbol)
                 except Exception:
                     funding_rate = 0.0
-            mmr = MMR_DEFAULT
-            if self._market == 'futures' and hasattr(self.exchange, 'maintenance_margin_rate'):
-                try:
-                    mmr = await self.exchange.maintenance_margin_rate(self.symbol)
-                except Exception:
-                    mmr = MMR_DEFAULT
+                if hasattr(self.exchange, "maintenance_margin_rate"):
+                    try:
+                        mmr = await self.exchange.maintenance_margin_rate(self.symbol)
+                    except Exception:
+                        mmr = MMR_DEFAULT
 
             order = self._risk_manager.evaluate(
                 signal,
@@ -446,16 +453,15 @@ class Engine:
                     self._stop_order_id[signal.symbol] = (
                         prot.exchange_order_id if prot is not None else None
                     )
-                if self._market == 'futures':
                     try:
                         action = await self.exchange.enforce_liquidation_buffer(
                             self.symbol, current_price=current_price,
                             buffer_pct=self._liq_buffer_pct, stop_loss=signal.stop_loss,
                         )
-                        if action in ('margin_added', 'closed'):
-                            logger.warning('liq-buffer guard on %s: %s', self.symbol, action)
+                        if action in ("margin_added", "closed"):
+                            logger.warning("liq-buffer guard on %s: %s", self.symbol, action)
                     except Exception as exc:
-                        logger.warning('liq-buffer guard failed on %s: %s', self.symbol, exc)
+                        logger.warning("liq-buffer guard failed on %s: %s", self.symbol, exc)
         else:
             await self._log_decision(signal, "REJECTED", rejection, regime)
 

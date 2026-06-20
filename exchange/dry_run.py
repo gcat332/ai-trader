@@ -1,5 +1,5 @@
 import logging
-from core.models import Order, Position
+from core.models import Order
 from exchange.base import Exchange
 
 logger = logging.getLogger(__name__)
@@ -88,6 +88,6 @@ class DryRunExchange(Exchange):
                     logger.warning("DRY-RUN: WOULD add margin / close %s (liq %.4f within buffer)",
                                    symbol, pos.liquidation_price)
                     action = "would_act"
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("DRY-RUN: liquidation-buffer read failed for %s: %s", symbol, exc)
         return action

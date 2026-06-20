@@ -421,3 +421,24 @@ and describes a different liquidation-buffer task; this entry follows the newest
 user request. Pre-existing untracked package.json and package-lock.json were not
 modified or staged.
 ---
+---
+Timestamp: 2026-06-20 15:14:21 +0700
+Agent: Codex
+Task: Cleanup deferred M2/M3 final review minors
+Files Modified: exchange/binance_futures.py, core/engine.py, exchange/dry_run.py,
+tests/test_binance_futures_exchange.py, tests/test_engine.py, tests/test_dry_run.py,
+tests/test_loop_config.py, .superpowers/sdd/cleanup-report.md, changes.log
+Summary of Changes: Added a zero-rounded quantity guard to Binance futures
+partial_take_profit, made engine partial-TP mark the symbol done before
+best-effort breakeven stop movement, merged adjacent futures-only engine blocks
+without changing order, removed the unused dry-run Position import, logged
+dry-run liquidation-buffer read failures at debug, and closed the requested
+test gaps for leverage-conflict symbol matching and negative PARTIAL_TP_PCT.
+Validation: Red focused run
+.venv/bin/python -m pytest tests/test_binance_futures_exchange.py tests/test_engine.py tests/test_dry_run.py tests/test_loop_config.py -q
+-> 2 failed, 82 passed, 1 warning. Focused green run of the same command ->
+84 passed, 1 warning. Full suite .venv/bin/python -m pytest -q -> 527 passed,
+6 skipped, 1 warning.
+Notes for Next Agent: Spot/non-futures paths were not changed. Pre-existing
+untracked package.json and package-lock.json were not modified or staged.
+---
