@@ -2,6 +2,7 @@
 import pytest
 from datetime import datetime, timezone
 from core.models import Signal, Position
+from exchange.futures_math import liquidation_price
 from risk.manager import RiskManager
 
 
@@ -319,6 +320,41 @@ def test_liquidation_guard_rejects_sl_beyond_liq(risk):
         )
         is None
     )
+    assert risk.last_rejection_reason == "liquidation_too_close"
+
+
+def test_higher_mmr_straddles_liquidation_guard(risk):
+    entry = 100.0
+    stop_loss = 91.0
+    leverage = 10
+    low_mmr = 0.005
+    high_mmr = 0.012
+    buy_signal = _futures_signal(side="BUY", entry=entry, stop_loss=stop_loss)
+
+    assert liquidation_price("LONG", entry, leverage, low_mmr) < stop_loss
+    assert liquidation_price("LONG", entry, leverage, high_mmr) >= stop_loss
+
+    accepted = risk.evaluate(
+        buy_signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=leverage,
+        risk_per_trade=0.01,
+        mmr=low_mmr,
+    )
+    rejected = risk.evaluate(
+        buy_signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=leverage,
+        risk_per_trade=0.01,
+        mmr=high_mmr,
+    )
+
+    assert accepted is not None
+    assert rejected is None
     assert risk.last_rejection_reason == "liquidation_too_close"
 
 

@@ -336,3 +336,26 @@ Engineering Notes: Staff review caught 3 bugs the green per-task suites hid — 
 Validation: Full suite .venv/bin/python -m pytest -q -> 474 passed, 6 skipped, 1 warning. Contract test skipped offline (needs RUN_CONTRACT_TESTS=1 + testnet keys). Branch feat/futures-m2-testnet, 19 commits ahead of main, NOT pushed/merged. Final whole-branch review (Opus): READY-TO-MERGE.
 Notes for Next Agent: See HANDOFF.md (machine-portable) + user_todo.md (pre-go-live checklist). M2 is testnet-only; real money (mainnet) needs M3 (not built — write a new plan first). To move to another machine: push the branch first (it is local-only). Pre-existing untracked package.json/package-lock.json not modified.
 ---
+---
+Timestamp: 2026-06-20 13:47:08 +0700
+Agent: Codex
+Task: Implement Futures M3 Task 4 live leverage-tier MMR for pre-trade liquidation guard
+Files Modified: exchange/binance_futures.py, core/engine.py,
+tests/test_binance_futures_exchange.py, tests/test_risk_manager.py,
+tests/test_engine.py, .superpowers/sdd/task-4-report.md, changes.log
+Summary of Changes: Added BinanceFuturesExchange.maintenance_margin_rate() using
+fetch_leverage_tiers([symbol]) and the first tier's maintenanceMarginRate with
+MMR_DEFAULT fallback. Threaded the futures engine pre-risk path to fetch that
+live MMR only when the exchange exposes the method, while paper futures and spot
+continue passing MMR_DEFAULT. Added adapter fallback tests, an actual
+liquidation_price straddle test, and engine mmr pass-through/default tests.
+Validation: Red phase .venv/bin/python -m pytest
+tests/test_binance_futures_exchange.py tests/test_risk_manager.py
+tests/test_engine.py -q -> 5 failed, 83 passed, 1 warning. Focused green
+.venv/bin/python -m pytest tests/test_binance_futures_exchange.py
+tests/test_risk_manager.py tests/test_engine.py -q -> 88 passed, 1 warning.
+Full suite .venv/bin/python -m pytest -q -> 492 passed, 6 skipped, 1 warning.
+Notes for Next Agent: risk/manager.py already accepted mmr from M1, so production
+risk code was not changed. Existing untracked package.json and package-lock.json
+were not modified.
+---

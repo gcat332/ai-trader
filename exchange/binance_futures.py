@@ -3,6 +3,7 @@ import logging
 import ccxt.async_support as ccxt
 from core.models import Order, Position
 from exchange.base import Exchange
+from exchange.futures_math import MMR_DEFAULT
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,16 @@ class BinanceFuturesExchange(Exchange):
     async def fetch_funding_rate(self, symbol: str) -> float:
         data = await self._exchange.fetch_funding_rate(symbol)
         return float(data.get("fundingRate") or 0.0)
+
+    async def maintenance_margin_rate(self, symbol: str) -> float:
+        try:
+            tiers = await self._exchange.fetch_leverage_tiers([symbol])
+            rows = tiers.get(symbol) if isinstance(tiers, dict) else tiers
+            if rows:
+                return float(rows[0].get("maintenanceMarginRate") or MMR_DEFAULT)
+        except Exception:
+            pass
+        return MMR_DEFAULT
 
     async def get_balance(self) -> dict[str, float]:
         raw = await self._exchange.fetch_balance()

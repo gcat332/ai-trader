@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from core.models import Order
 from exchange.binance_futures import BinanceFuturesExchange
+from exchange.futures_math import MMR_DEFAULT
 
 
 @pytest.fixture
@@ -246,6 +247,30 @@ async def test_get_balance_returns_usdt_free(fx):
 @pytest.mark.asyncio
 async def test_fetch_funding_rate_returns_float(fx):
     assert await fx.fetch_funding_rate("BTC/USDT") == 0.0001
+
+
+@pytest.mark.asyncio
+async def test_maintenance_margin_rate_from_first_tier(fx):
+    fx._exchange.fetch_leverage_tiers = AsyncMock(
+        return_value=[{"maintenanceMarginRate": 0.012, "minNotional": 0.0}]
+    )
+
+    assert await fx.maintenance_margin_rate("BTC/USDT") == 0.012
+    fx._exchange.fetch_leverage_tiers.assert_awaited_once_with(["BTC/USDT"])
+
+
+@pytest.mark.asyncio
+async def test_maintenance_margin_rate_falls_back_on_error(fx):
+    fx._exchange.fetch_leverage_tiers = AsyncMock(side_effect=Exception("no tiers"))
+
+    assert await fx.maintenance_margin_rate("BTC/USDT") == MMR_DEFAULT
+
+
+@pytest.mark.asyncio
+async def test_maintenance_margin_rate_falls_back_on_empty_tiers(fx):
+    fx._exchange.fetch_leverage_tiers = AsyncMock(return_value=[])
+
+    assert await fx.maintenance_margin_rate("BTC/USDT") == MMR_DEFAULT
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 from core.models import DecisionRecord, Order, Signal, TradeRecord
 from exchange.base import Exchange
+from exchange.futures_math import MMR_DEFAULT
 from risk.manager import RiskManager
 from strategy.base import BaseStrategy
 from strategy.regime import RegimeClassifier
@@ -331,6 +332,12 @@ class Engine:
                     funding_rate = await self.exchange.fetch_funding_rate(self.symbol)
                 except Exception:
                     funding_rate = 0.0
+            mmr = MMR_DEFAULT
+            if self._market == 'futures' and hasattr(self.exchange, 'maintenance_margin_rate'):
+                try:
+                    mmr = await self.exchange.maintenance_margin_rate(self.symbol)
+                except Exception:
+                    mmr = MMR_DEFAULT
 
             order = self._risk_manager.evaluate(
                 signal,
@@ -339,6 +346,7 @@ class Engine:
                 market=self._market,
                 leverage=self._leverage,
                 risk_per_trade=self._risk_per_trade,
+                mmr=mmr,
                 funding_rate=funding_rate,
                 funding_threshold=self._funding_skip_threshold,
                 liq_buffer_pct=self._liq_buffer_pct,

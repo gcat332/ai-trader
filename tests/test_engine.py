@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 from core.models import Order, Position, Signal
 from core.engine import Engine
 from exchange.paper import PaperExchange
+from exchange.futures_math import MMR_DEFAULT
 from exchange.paper_futures import PaperFuturesExchange
 from risk.manager import RiskManager
 from strategy.base import BaseStrategy
@@ -101,6 +102,16 @@ class LiveShapePaperFuturesExchange(CapturingPaperFuturesExchange):
             liquidation_price=None,
         )
         self._margin[(symbol, "")] = 325.0
+
+
+class RecordingRiskManager:
+    def __init__(self):
+        self.calls = []
+        self.last_rejection_reason = "recorded"
+
+    def evaluate(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return None
 
 
 @pytest.mark.asyncio
@@ -559,6 +570,53 @@ async def test_engine_fetches_funding_and_passes_to_risk():
     assert await exchange.get_positions() == []
     assert exchange.orders == []
     assert risk_manager.last_rejection_reason == "funding_adverse"
+
+
+@pytest.mark.asyncio
+async def test_futures_engine_passes_exchange_maintenance_margin_rate_to_risk():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
+    exchange.maintenance_margin_rate = AsyncMock(return_value=0.012)
+    risk_manager = RecordingRiskManager()
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_real_mmr"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=risk_manager,
+        market="futures",
+        leverage=2,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    exchange.maintenance_margin_rate.assert_awaited_once_with("BTC/USDT")
+    assert risk_manager.calls[0][1]["mmr"] == 0.012
+
+
+@pytest.mark.asyncio
+async def test_futures_engine_uses_default_mmr_when_exchange_lacks_tier_method():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
+    risk_manager = RecordingRiskManager()
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_default_mmr"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=risk_manager,
+        market="futures",
+        leverage=2,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    assert not hasattr(exchange, "maintenance_margin_rate")
+    assert risk_manager.calls[0][1]["mmr"] == MMR_DEFAULT
 
 
 @pytest.mark.asyncio
