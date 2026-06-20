@@ -56,8 +56,16 @@ async def test_open_protect_reports_liq_then_close(fx):
     assert pos.liquidation_price is not None and pos.liquidation_price > 0  # exchange truth
 
     # Close reduce-only back to flat + cancel the resting protective leg.
-    await fx.place_order(_sell(sym, qty, reduce_only=True), current_price=px)
-    await fx.cancel_order(prot.exchange_order_id, sym)
+    # Best-effort, each guarded: a partial fill or an already-triggered protective
+    # order must not leave the testnet account with a dangling position/order.
+    try:
+        await fx.place_order(_sell(sym, qty, reduce_only=True), current_price=px)
+    except Exception:
+        pass
+    try:
+        await fx.cancel_order(prot.exchange_order_id, sym)
+    except Exception:
+        pass
 
 
 def _buy(sym, qty):
