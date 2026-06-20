@@ -24,6 +24,8 @@ from core.drift_monitor import DriftDetector
 from core.engine import Engine
 from core.live_controller import LiveEngineController
 from core.loop_config import parse_loops, parse_runtime_configs
+from core.loop_config import validate_loop_leverage_consistency
+from core.macro_blackout import load_blackout
 from core.supervisor import run_supervised
 from core.strategy_factory import build_runtime_strategy, build_strategy
 from core.strategy_manager import StrategyManager
@@ -56,6 +58,17 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_correlation_groups(raw: str | None) -> list[set[str]] | None:
+    if raw is None or raw == "":
+        return None
+    groups = []
+    for group_raw in raw.split(";"):
+        group = {symbol.strip() for symbol in group_raw.split(",") if symbol.strip()}
+        if group:
+            groups.append(group)
+    return groups or None
+
+
 def _build_paper_exchange_for(cfg, initial_balance):
     """Build per-loop exchange for paper mode: PaperFuturesExchange if futures, else PaperExchange."""
     if getattr(cfg, "market", "spot") == "futures":
@@ -75,6 +88,20 @@ def _build_live_exchange_for(cfg, settings, spot_exchange):
             leverage=getattr(cfg, "leverage", 1),
         )
     return spot_exchange
+
+
+def _futures_engine_kwargs(cfg) -> dict:
+    return {
+        "market": cfg.market,
+        "leverage": cfg.leverage,
+        "risk_per_trade": cfg.risk_per_trade,
+        "max_hold_hours": cfg.max_hold_hours,
+        "reentry_cooldown_bars": cfg.reentry_cooldown_bars,
+        "funding_skip_threshold": cfg.funding_skip_threshold,
+        "partial_tp_pct": getattr(cfg, "partial_tp_pct", 0.0),
+        "liq_buffer_pct": float(os.getenv("LIQ_BUFFER_PCT", "0.0")),
+        "slippage_pad": float(os.getenv("LIQ_SLIPPAGE_PAD", "0.0")),
+    }
 
 
 def _runtime_is_scheduled(runtime_config) -> bool:
@@ -124,6 +151,16 @@ def _validate_go_live_safety(
         raise ValueError("API_KEY is required when API_HOST is not localhost for LIVE trading")
 
 
+async def _verify_futures_accounts(loop_specs, paper_mode: bool) -> None:
+    """Pre-arm: every LIVE futures loop's exchange must be in one-way mode. Raises to abort startup."""
+    if paper_mode:
+        return
+    from exchange.binance_futures import BinanceFuturesExchange
+    for spec in loop_specs:
+        if getattr(spec.config, "market", "spot") == "futures" and isinstance(spec.exchange, BinanceFuturesExchange):
+            await spec.exchange.verify_account_mode()
+
+
 async def _run_notifier_forever(notifier: TelegramNotifier, check_interval: float = 60.0) -> None:
     await notifier.start()
     try:
@@ -162,6 +199,7 @@ async def run():
 
     loops = parse_loops(os.environ)
     runtime_configs = parse_runtime_configs(os.environ)
+    validate_loop_leverage_consistency(runtime_configs)
     _warn_on_mixed_runtime_modes(runtime_configs, logger)
     live_runtime_configured = any(
         cfg.mode == "LIVE" and _runtime_is_scheduled(cfg)
@@ -246,6 +284,10 @@ async def run():
                 if paper_mode
                 else _build_live_exchange_for(spec.config, settings, exchange)
             )
+            if _env_bool('DRY_RUN', False) and not paper_mode:
+                from exchange.dry_run import DryRunExchange
+                spec.exchange = DryRunExchange(spec.exchange)
+        await _verify_futures_accounts(loop_specs, paper_mode)
 
         allocation_manager = AllocationManager({
             spec.config.loop_id: spec.config.allocation_pct
@@ -270,6 +312,8 @@ async def run():
             confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.6")),
             max_drawdown_limit_pct=_optional_float_env("MAX_DRAWDOWN_LIMIT_PCT"),
             max_exposure_pct=_optional_float_env("MAX_EXPOSURE_PCT"),
+            correlation_groups=_parse_correlation_groups(os.getenv("CORRELATION_GROUPS")),
+            blackout_windows=load_blackout(os.getenv("MACRO_BLACKOUT_FILE", "config/macro_blackout.json")),
         )
 
         async with aiosqlite.connect("db/trades.db") as conn:
@@ -279,15 +323,7 @@ async def run():
             for spec in loop_specs:
                 engine_kwargs = {}
                 if spec.config.market == "futures":
-                    engine_kwargs = {
-                        "market": spec.config.market,
-                        "leverage": spec.config.leverage,
-                        "risk_per_trade": spec.config.risk_per_trade,
-                        "max_hold_hours": spec.config.max_hold_hours,
-                        "reentry_cooldown_bars": spec.config.reentry_cooldown_bars,
-                        "funding_skip_threshold": spec.config.funding_skip_threshold,
-                        "liq_buffer_pct": float(os.getenv("LIQ_BUFFER_PCT", "0.0")),
-                    }
+                    engine_kwargs = _futures_engine_kwargs(spec.config)
                 spec.engine = Engine(
                     exchange=spec.exchange,
                     strategy=spec.strategy,

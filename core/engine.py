@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 from core.models import DecisionRecord, Order, Signal, TradeRecord
 from exchange.base import Exchange
+from exchange.futures_math import MMR_DEFAULT
 from risk.manager import RiskManager
 from strategy.base import BaseStrategy
 from strategy.regime import RegimeClassifier
@@ -38,6 +39,8 @@ class Engine:
         reentry_cooldown_bars: int = 0,
         funding_skip_threshold: float = 0.001,
         liq_buffer_pct: float = 0.0,
+        slippage_pad: float = 0.0,
+        partial_tp_pct: float = 0.0,
     ):
         self.exchange = exchange
         self.strategy = strategy
@@ -56,8 +59,13 @@ class Engine:
         self._reentry_cooldown_bars = reentry_cooldown_bars
         self._funding_skip_threshold = funding_skip_threshold
         self._liq_buffer_pct = liq_buffer_pct
+        self._slippage_pad = slippage_pad
+        self._partial_tp_pct = partial_tp_pct
         self._cooldown: dict[tuple[str, str], int] = {}
         self._opened_at: dict[tuple[str, str], datetime] = {}
+        self._partial_done: set[str] = set()
+        self._partial_tp_target: dict[str, float] = {}
+        self._stop_order_id: dict[str, str | None] = {}
         self.is_running: bool = True
         self._regime_classifier = RegimeClassifier()
         # Maps symbol → (decision_id, confidence, challenger_conf, regime, strategy_id)
@@ -171,6 +179,9 @@ class Engine:
         )
         await self.exchange.place_order(order, current_price=current_price)
         self._opened_at.pop(key, None)
+        self._partial_done.discard(position.symbol)
+        self._partial_tp_target.pop(position.symbol, None)
+        self._stop_order_id.pop(position.symbol, None)
         self._cooldown[key] = self._reentry_cooldown_bars
 
     async def _close_expired_futures_position(
@@ -252,6 +263,7 @@ class Engine:
         )
         current_price = float(df["close"].iloc[-1])
         high = float(df["high"].iloc[-1])
+        low = float(df["low"].iloc[-1])
 
         # Ratchet any trailing stop on the open position BEFORE acting on a new signal.
         await self._manage_trailing(high, current_price)
@@ -274,6 +286,35 @@ class Engine:
         futures_positions = None
         if self._market == "futures":
             futures_positions = await self.exchange.get_positions()
+            if self._partial_tp_pct > 0:
+                held = self._find_futures_position(futures_positions, self.symbol)
+                tp = self._partial_tp_target.get(self.symbol)
+                if (
+                    held is not None
+                    and tp is not None
+                    and self.symbol not in self._partial_done
+                    and (
+                        (held.side == "LONG" and high >= tp)
+                        or (held.side == "SHORT" and low <= tp)
+                    )
+                ):
+                    qty = round(held.quantity * self._partial_tp_pct, 8)
+                    remaining_qty = held.quantity - qty
+                    if qty > 0:
+                        await self.exchange.partial_take_profit(
+                            self.symbol,
+                            held.side,
+                            qty,
+                            current_price,
+                        )
+                        await self.exchange.move_stop_to_breakeven(
+                            self.symbol,
+                            held.side,
+                            remaining_qty,
+                            held.entry_price,
+                            self._stop_order_id.get(self.symbol),
+                        )
+                        self._partial_done.add(self.symbol)
             if await self._close_expired_futures_position(
                 signal,
                 futures_positions,
@@ -331,6 +372,12 @@ class Engine:
                     funding_rate = await self.exchange.fetch_funding_rate(self.symbol)
                 except Exception:
                     funding_rate = 0.0
+            mmr = MMR_DEFAULT
+            if self._market == 'futures' and hasattr(self.exchange, 'maintenance_margin_rate'):
+                try:
+                    mmr = await self.exchange.maintenance_margin_rate(self.symbol)
+                except Exception:
+                    mmr = MMR_DEFAULT
 
             order = self._risk_manager.evaluate(
                 signal,
@@ -339,9 +386,11 @@ class Engine:
                 market=self._market,
                 leverage=self._leverage,
                 risk_per_trade=self._risk_per_trade,
+                mmr=mmr,
                 funding_rate=funding_rate,
                 funding_threshold=self._funding_skip_threshold,
                 liq_buffer_pct=self._liq_buffer_pct,
+                slippage_pad=self._slippage_pad,
             )
             rejection = self._risk_manager.last_rejection_reason
         else:
@@ -392,6 +441,11 @@ class Engine:
                     strategy_id=signal.strategy_id,
                 )
                 self._arm_trailing(signal, order.quantity, current_price, prot)
+                if self._market == "futures":
+                    self._partial_tp_target[signal.symbol] = signal.take_profit
+                    self._stop_order_id[signal.symbol] = (
+                        prot.exchange_order_id if prot is not None else None
+                    )
                 if self._market == 'futures':
                     try:
                         action = await self.exchange.enforce_liquidation_buffer(

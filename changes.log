@@ -336,3 +336,88 @@ Engineering Notes: Staff review caught 3 bugs the green per-task suites hid — 
 Validation: Full suite .venv/bin/python -m pytest -q -> 474 passed, 6 skipped, 1 warning. Contract test skipped offline (needs RUN_CONTRACT_TESTS=1 + testnet keys). Branch feat/futures-m2-testnet, 19 commits ahead of main, NOT pushed/merged. Final whole-branch review (Opus): READY-TO-MERGE.
 Notes for Next Agent: See HANDOFF.md (machine-portable) + user_todo.md (pre-go-live checklist). M2 is testnet-only; real money (mainnet) needs M3 (not built — write a new plan first). To move to another machine: push the branch first (it is local-only). Pre-existing untracked package.json/package-lock.json not modified.
 ---
+---
+Timestamp: 2026-06-20 13:47:08 +0700
+Agent: Codex
+Task: Implement Futures M3 Task 4 live leverage-tier MMR for pre-trade liquidation guard
+Files Modified: exchange/binance_futures.py, core/engine.py,
+tests/test_binance_futures_exchange.py, tests/test_risk_manager.py,
+tests/test_engine.py, .superpowers/sdd/task-4-report.md, changes.log
+Summary of Changes: Added BinanceFuturesExchange.maintenance_margin_rate() using
+fetch_leverage_tiers([symbol]) and the first tier's maintenanceMarginRate with
+MMR_DEFAULT fallback. Threaded the futures engine pre-risk path to fetch that
+live MMR only when the exchange exposes the method, while paper futures and spot
+continue passing MMR_DEFAULT. Added adapter fallback tests, an actual
+liquidation_price straddle test, and engine mmr pass-through/default tests.
+Validation: Red phase .venv/bin/python -m pytest
+tests/test_binance_futures_exchange.py tests/test_risk_manager.py
+tests/test_engine.py -q -> 5 failed, 83 passed, 1 warning. Focused green
+.venv/bin/python -m pytest tests/test_binance_futures_exchange.py
+tests/test_risk_manager.py tests/test_engine.py -q -> 88 passed, 1 warning.
+Full suite .venv/bin/python -m pytest -q -> 492 passed, 6 skipped, 1 warning.
+Notes for Next Agent: risk/manager.py already accepted mmr from M1, so production
+risk code was not changed. Existing untracked package.json and package-lock.json
+were not modified.
+---
+---
+Timestamp: 2026-06-20 13:57:15 +0700
+Agent: Codex
+Task: Implement Futures M3 Task 5 slippage pad on pre-trade liquidation guard
+Files Modified: risk/manager.py, core/engine.py, main.py,
+tests/test_risk_manager.py, tests/test_engine.py, tests/test_main_wiring.py,
+.superpowers/sdd/task-5-report.md, changes.log
+Summary of Changes: Added slippage_pad to RiskManager.evaluate, Engine wiring,
+and futures engine kwargs from LIQ_SLIPPAGE_PAD. Added the SOL/USDT straddle
+test verifying liquidation_price("LONG", 100.0, 10, 0.005) == 90.5 so
+slippage_pad=0.0 passes while slippage_pad=0.05 rejects with
+liquidation_too_close. Added engine pass-through and main env threading tests.
+Validation: Red phase .venv/bin/python -m pytest tests/test_risk_manager.py -q
+-> 1 failed, 39 passed; .venv/bin/python -m pytest tests/test_engine.py -k
+slippage_pad -q -> 1 failed; .venv/bin/python -m pytest tests/test_main_wiring.py
+-k slippage_pad -q -> 1 failed. Green phase .venv/bin/python -m pytest
+tests/test_risk_manager.py -q -> 40 passed. Focused wiring tests each passed.
+Full suite .venv/bin/python -m pytest -q -> 495 passed, 6 skipped, 1 warning.
+Notes for Next Agent: Existing no-pad liquidation guard behavior is preserved;
+only the new slippage_pad tightens the guard toward the slippage-adjusted
+liquidation side. Existing untracked package.json and package-lock.json were not
+modified.
+---
+---
+Timestamp: 2026-06-20 14:20:02 +0700
+Agent: Codex
+Task: Implement Futures M3 Task 8 adapter partial-TP and breakeven stop move
+Files Modified: exchange/binance_futures.py, exchange/paper_futures.py, tests/test_binance_futures_exchange.py, tests/test_paper_futures.py, .superpowers/sdd/task-8-report.md, changes.log
+Summary of Changes: Added Binance futures sized reduce-only partial take-profit orders without closePosition and never-naked breakeven stop replacement that creates the new STOP before cancelling the old stop. Added paper futures equivalents for partial position realization and breakeven stop tracking. Added focused TDD coverage for order params, exit side, call order, create-failure no-cancel behavior, partial paper TradeRecord booking, and stop reset.
+Validation: .venv/bin/python -m pytest tests/test_binance_futures_exchange.py tests/test_paper_futures.py -q -> 43 passed. .venv/bin/python -m pytest -q -> 512 passed, 6 skipped, 1 warning.
+Notes for Next Agent: Pre-existing untracked package.json and package-lock.json were not modified or staged. Partial take-profit intentionally never sets closePosition; breakeven stop replacement intentionally leaves the old stop in place if new stop placement raises.
+---
+---
+Timestamp: 2026-06-20 14:20:02 +0700
+Agent: Codex
+Task: Commit Futures M3 Task 8
+Files Modified: .superpowers/sdd/task-8-report.md, changes.log
+Summary of Changes: Updated the Task 8 report to record that implementation and tests completed but Git staging/commit is blocked.
+Validation: Git staging failed before commit with `fatal: Unable to create '.git/index.lock': Operation not permitted`.
+Notes for Next Agent: Working-tree files are left on disk unstaged. Retry staging/commit from an environment with write access to `.git`; expected commit message is `feat(futures): sized reduce-only partial-TP + never-naked breakeven stop move` with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
+---
+---
+Timestamp: 2026-06-20 14:29:09 +0700
+Agent: Codex
+Task: Implement Futures M3 Task 9 engine partial TP at TP1 plus breakeven stop
+Files Modified: core/engine.py, tests/test_engine.py, .superpowers/sdd/task-9-report.md, changes.log
+Summary of Changes: Added default-off Engine partial_tp_pct configuration and
+futures-only state for one-shot partial take profit at TP1. The engine now
+stashes TP1 and stop-order metadata after futures entries are protected, invokes
+partial_take_profit plus move_stop_to_breakeven once when a held futures position
+reaches TP1, and clears the state when the engine closes the futures position.
+Added regression tests for the enabled one-shot path and the default-off path.
+Validation: Red phase .venv/bin/python -m pytest tests/test_engine.py -q -> 1
+failed, 22 passed, 1 warning, failing because Engine lacked partial_tp_pct.
+Green phase .venv/bin/python -m pytest tests/test_engine.py -q -> 23 passed, 1
+warning. Full suite .venv/bin/python -m pytest -q -> 514 passed, 6 skipped, 1
+warning.
+Notes for Next Agent: The checked-in .superpowers/sdd/task-9-brief.md is stale
+and describes a different liquidation-buffer task; this entry follows the newest
+user request. Pre-existing untracked package.json and package-lock.json were not
+modified or staged.
+---

@@ -138,6 +138,7 @@ def parse_runtime_configs(env: dict) -> list[StrategyRuntimeConfig]:
             max_hold_hours=None,
             reentry_cooldown_bars=0,
             funding_skip_threshold=0.001,
+            partial_tp_pct=0.0,
         )]
 
     configs: list[StrategyRuntimeConfig] = []
@@ -160,6 +161,9 @@ def parse_runtime_configs(env: dict) -> list[StrategyRuntimeConfig]:
             "FUNDING_SKIP_THRESHOLD",
             env.get("FUNDING_SKIP_THRESHOLD", "0.001"),
         ))
+        partial_tp_pct = float(lp.get("PARTIAL_TP_PCT", env.get("PARTIAL_TP_PCT", "0")))
+        if not 0.0 <= partial_tp_pct <= 1.0:
+            raise ValueError(f"{prefix}PARTIAL_TP_PCT={partial_tp_pct} must be in [0,1]")
         if market not in ("spot", "futures"):
             raise ValueError(f"Invalid {prefix}market={market!r}; expected spot or futures")
         if leverage > 1 and market != "futures":
@@ -186,5 +190,22 @@ def parse_runtime_configs(env: dict) -> list[StrategyRuntimeConfig]:
             max_hold_hours=max_hold_hours,
             reentry_cooldown_bars=reentry_cooldown_bars,
             funding_skip_threshold=funding_skip_threshold,
+            partial_tp_pct=partial_tp_pct,
         ))
     return configs
+
+
+def validate_loop_leverage_consistency(configs: list[StrategyRuntimeConfig]) -> None:
+    seen: dict[str, int] = {}
+    for cfg in configs:
+        if str(getattr(cfg, "market", "spot")).lower() != "futures":
+            continue
+        symbol = cfg.symbol
+        leverage = cfg.leverage
+        existing = seen.get(symbol)
+        if existing is not None and existing != leverage:
+            raise ValueError(
+                f"Conflicting futures leverage for {symbol}: "
+                f"previous={existing}, current={leverage}"
+            )
+        seen[symbol] = leverage

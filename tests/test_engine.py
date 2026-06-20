@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 from core.models import Order, Position, Signal
 from core.engine import Engine
 from exchange.paper import PaperExchange
+from exchange.futures_math import MMR_DEFAULT
 from exchange.paper_futures import PaperFuturesExchange
 from risk.manager import RiskManager
 from strategy.base import BaseStrategy
@@ -101,6 +102,16 @@ class LiveShapePaperFuturesExchange(CapturingPaperFuturesExchange):
             liquidation_price=None,
         )
         self._margin[(symbol, "")] = 325.0
+
+
+class RecordingRiskManager:
+    def __init__(self):
+        self.calls = []
+        self.last_rejection_reason = "recorded"
+
+    def evaluate(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return None
 
 
 @pytest.mark.asyncio
@@ -562,6 +573,76 @@ async def test_engine_fetches_funding_and_passes_to_risk():
 
 
 @pytest.mark.asyncio
+async def test_futures_engine_passes_exchange_maintenance_margin_rate_to_risk():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
+    exchange.maintenance_margin_rate = AsyncMock(return_value=0.012)
+    risk_manager = RecordingRiskManager()
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_real_mmr"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=risk_manager,
+        market="futures",
+        leverage=2,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    exchange.maintenance_margin_rate.assert_awaited_once_with("BTC/USDT")
+    assert risk_manager.calls[0][1]["mmr"] == 0.012
+
+
+@pytest.mark.asyncio
+async def test_futures_engine_passes_slippage_pad_to_risk():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
+    risk_manager = RecordingRiskManager()
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_slippage_pad"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=risk_manager,
+        market="futures",
+        leverage=2,
+        slippage_pad=0.05,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    assert risk_manager.calls[0][1]["slippage_pad"] == 0.05
+
+
+@pytest.mark.asyncio
+async def test_futures_engine_uses_default_mmr_when_exchange_lacks_tier_method():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
+    risk_manager = RecordingRiskManager()
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_default_mmr"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=risk_manager,
+        market="futures",
+        leverage=2,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    assert not hasattr(exchange, "maintenance_margin_rate")
+    assert risk_manager.calls[0][1]["mmr"] == MMR_DEFAULT
+
+
+@pytest.mark.asyncio
 async def test_engine_calls_liq_buffer_after_open():
     exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
     exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
@@ -582,6 +663,75 @@ async def test_engine_calls_liq_buffer_after_open():
 
     exchange.enforce_liquidation_buffer.assert_awaited_once()
     assert exchange.enforce_liquidation_buffer.await_args.args[0] == "BTC/USDT"
+
+
+@pytest.mark.asyncio
+async def test_partial_tp_triggers_once_at_tp1_then_breakeven():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
+    exchange.partial_take_profit = AsyncMock(wraps=exchange.partial_take_profit)
+    exchange.move_stop_to_breakeven = AsyncMock(wraps=exchange.move_stop_to_breakeven)
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_partial_tp"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=RiskManager(),
+        market="futures",
+        leverage=2,
+        partial_tp_pct=0.5,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+    opened_qty = (await exchange.get_positions())[0].quantity
+    engine.strategy = AlwaysHoldStrategy(strategy_id="futures_partial_tp")
+
+    await engine.process_candles([
+        [1700003600000, 65000.0, 67100.0, 64500.0, 66800.0, 100.0],
+    ])
+
+    exchange.partial_take_profit.assert_awaited_once()
+    assert exchange.partial_take_profit.await_args.args[:2] == ("BTC/USDT", "LONG")
+    assert exchange.partial_take_profit.await_args.args[2] == pytest.approx(opened_qty * 0.5)
+    exchange.move_stop_to_breakeven.assert_awaited_once()
+    assert exchange.move_stop_to_breakeven.await_args.args[:2] == ("BTC/USDT", "LONG")
+    assert exchange.move_stop_to_breakeven.await_args.args[2] == pytest.approx(opened_qty * 0.5)
+
+    await engine.process_candles([
+        [1700007200000, 66800.0, 67200.0, 66000.0, 67100.0, 100.0],
+    ])
+
+    exchange.partial_take_profit.assert_awaited_once()
+    exchange.move_stop_to_breakeven.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_partial_tp_off_by_default():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
+    exchange.partial_take_profit = AsyncMock(wraps=exchange.partial_take_profit)
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_partial_tp_off"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=RiskManager(),
+        market="futures",
+        leverage=2,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+    engine.strategy = AlwaysHoldStrategy(strategy_id="futures_partial_tp_off")
+
+    await engine.process_candles([
+        [1700003600000, 65000.0, 67100.0, 64500.0, 66800.0, 100.0],
+    ])
+
+    exchange.partial_take_profit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

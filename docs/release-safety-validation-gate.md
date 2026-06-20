@@ -90,8 +90,13 @@ Use the smallest command set that matches the change:
 .venv/bin/python -m pytest tests/test_reports_scheduler.py tests/test_trading_loop_daily_reset.py -q
 .venv/bin/python -m pytest tests/test_go_live_safety.py tests/test_live_controller.py tests/test_shutdown_cleanup.py -q
 .venv/bin/python -m pytest tests/test_binance_exchange.py tests/test_fetcher.py -q
+.venv/bin/python -m pytest tests/test_binance_futures_exchange.py tests/test_dry_run.py tests/test_go_live_safety.py tests/test_macro_blackout.py -q
 RUN_CONTRACT_TESTS=1 .venv/bin/python -m pytest tests/test_contract_binance_testnet.py -v
 ```
+
+The futures-testnet contract test
+`RUN_CONTRACT_TESTS=1 .venv/bin/python -m pytest tests/test_contract_binance_futures_testnet.py`
+is REQUIRED evidence for any change to the live futures path.
 
 When a change crosses multiple surfaces, combine only the relevant files instead
 of defaulting to the full suite.

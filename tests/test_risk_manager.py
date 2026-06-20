@@ -2,6 +2,7 @@
 import pytest
 from datetime import datetime, timezone
 from core.models import Signal, Position
+from exchange.futures_math import liquidation_price
 from risk.manager import RiskManager
 
 
@@ -14,6 +15,20 @@ def _buy_signal(confidence: float = 0.8, stop_loss: float | None = 63500.0) -> S
         stop_loss=stop_loss,
         trailing_sl=False,
         confidence=confidence,
+        strategy_id="rsi_macd",
+        timestamp=datetime.now(timezone.utc),
+    )
+
+
+def _buy_signal_for(symbol: str, entry: float = 100.0, stop_loss: float = 95.0) -> Signal:
+    return Signal(
+        symbol=symbol,
+        side="BUY",
+        entry_price=entry,
+        take_profit=entry * 1.03,
+        stop_loss=stop_loss,
+        trailing_sl=False,
+        confidence=0.8,
         strategy_id="rsi_macd",
         timestamp=datetime.now(timezone.utc),
     )
@@ -168,6 +183,34 @@ def test_correlation_filter_blocks_eth_when_btc_open(risk):
     assert risk.evaluate(eth_signal, {"USDT": 10000.0}, [btc_pos]) is None
 
 
+def test_default_correlation_groups_block_btc_when_eth_open(risk):
+    eth_pos = _open_position("ETH/USDT")
+
+    assert risk.evaluate(_buy_signal_for("BTC/USDT"), {"USDT": 10000.0}, [eth_pos]) is None
+    assert risk.last_rejection_reason == "correlation_filter"
+
+
+def test_custom_correlation_group_blocks_within_group():
+    risk = RiskManager(correlation_groups=[{"SOL/USDT", "AVAX/USDT"}])
+    sol_pos = _open_position("SOL/USDT")
+
+    assert risk.evaluate(_buy_signal_for("AVAX/USDT"), {"USDT": 10000.0}, [sol_pos]) is None
+    assert risk.last_rejection_reason == "correlation_filter"
+
+
+def test_custom_correlation_group_does_not_block_symbol_outside_group():
+    risk = RiskManager(correlation_groups=[{"SOL/USDT", "AVAX/USDT"}])
+    sol_pos = _open_position("SOL/USDT")
+
+    assert risk.evaluate(_buy_signal_for("BTC/USDT"), {"USDT": 10000.0}, [sol_pos]) is not None
+
+
+def test_default_correlation_groups_do_not_block_sol(risk):
+    eth_pos = _open_position("ETH/USDT")
+
+    assert risk.evaluate(_buy_signal_for("SOL/USDT"), {"USDT": 10000.0}, [eth_pos]) is not None
+
+
 def test_confidence_scaled_sizing(risk):
     # confidence=0.8 → size = 5% × 0.8 = 4% of balance
     order = risk.evaluate(_buy_signal(confidence=0.8), {"USDT": 10000.0}, [])
@@ -320,6 +363,189 @@ def test_liquidation_guard_rejects_sl_beyond_liq(risk):
         is None
     )
     assert risk.last_rejection_reason == "liquidation_too_close"
+
+
+def test_higher_mmr_straddles_liquidation_guard(risk):
+    entry = 100.0
+    stop_loss = 91.0
+    leverage = 10
+    low_mmr = 0.005
+    high_mmr = 0.012
+    buy_signal = _futures_signal(side="BUY", entry=entry, stop_loss=stop_loss)
+
+    assert liquidation_price("LONG", entry, leverage, low_mmr) < stop_loss
+    assert liquidation_price("LONG", entry, leverage, high_mmr) >= stop_loss
+
+    accepted = risk.evaluate(
+        buy_signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=leverage,
+        risk_per_trade=0.01,
+        mmr=low_mmr,
+    )
+    rejected = risk.evaluate(
+        buy_signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=leverage,
+        risk_per_trade=0.01,
+        mmr=high_mmr,
+    )
+
+    assert accepted is not None
+    assert rejected is None
+    assert risk.last_rejection_reason == "liquidation_too_close"
+
+
+def test_slippage_pad_widens_liq_guard(risk):
+    entry = 100.0
+    leverage = 10
+    mmr = 0.005
+    stop_loss = 92.0
+    signal = _futures_signal(side="BUY", entry=entry, stop_loss=stop_loss, confidence=0.9)
+
+    liq = liquidation_price("LONG", entry, leverage, mmr)
+    assert liq == pytest.approx(90.5)
+    assert liq < stop_loss
+
+    accepted = risk.evaluate(
+        signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=leverage,
+        risk_per_trade=0.01,
+        mmr=mmr,
+        slippage_pad=0.0,
+    )
+    rejected = risk.evaluate(
+        signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=leverage,
+        risk_per_trade=0.01,
+        mmr=mmr,
+        slippage_pad=0.05,
+    )
+
+    assert accepted is not None
+    assert rejected is None
+    assert risk.last_rejection_reason == "liquidation_too_close"
+
+
+def test_liq_buffer_pct_tightens_liq_guard_toward_entry(risk):
+    entry = 100.0
+    leverage = 10
+    mmr = 0.005
+    stop_loss = 92.0
+    signal = _futures_signal(side="BUY", entry=entry, stop_loss=stop_loss, confidence=0.9)
+
+    liq = liquidation_price("LONG", entry, leverage, mmr)
+    assert liq == pytest.approx(90.5)
+    assert liq < stop_loss
+
+    accepted = risk.evaluate(
+        signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=leverage,
+        risk_per_trade=0.01,
+        mmr=mmr,
+        liq_buffer_pct=0.0,
+    )
+    rejected = risk.evaluate(
+        signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=leverage,
+        risk_per_trade=0.01,
+        mmr=mmr,
+        liq_buffer_pct=0.05,
+    )
+
+    assert accepted is not None
+    assert rejected is None
+    assert risk.last_rejection_reason == "liquidation_too_close"
+
+
+def test_macro_blackout_blocks_open_inside_window():
+    windows = [
+        (
+            datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc),
+            datetime(2026, 6, 20, 14, 0, tzinfo=timezone.utc),
+        )
+    ]
+    now = datetime(2026, 6, 20, 13, 0, tzinfo=timezone.utc)
+    risk = RiskManager(blackout_windows=windows)
+
+    order = risk.evaluate(
+        _futures_signal(side="BUY", entry=100.0, stop_loss=95.0),
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=5,
+        now=now,
+    )
+
+    assert order is None
+    assert risk.last_rejection_reason == "macro_blackout"
+
+
+def test_macro_blackout_does_not_block_exit_inside_window():
+    windows = [
+        (
+            datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc),
+            datetime(2026, 6, 20, 14, 0, tzinfo=timezone.utc),
+        )
+    ]
+    now = datetime(2026, 6, 20, 13, 0, tzinfo=timezone.utc)
+    risk = RiskManager(blackout_windows=windows)
+    sell_signal = Signal(
+        symbol="BTC/USDT",
+        side="SELL",
+        entry_price=65000.0,
+        take_profit=63000.0,
+        stop_loss=67000.0,
+        trailing_sl=False,
+        confidence=0.8,
+        strategy_id="rsi_macd",
+        timestamp=datetime.now(timezone.utc),
+    )
+    position = _open_position("BTC/USDT", strategy_id="rsi_macd")
+
+    order = risk.evaluate(sell_signal, {"USDT": 10000.0}, [position], now=now)
+
+    assert order is not None
+    assert risk.last_rejection_reason is None
+
+
+def test_macro_blackout_allows_open_outside_window():
+    windows = [
+        (
+            datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc),
+            datetime(2026, 6, 20, 14, 0, tzinfo=timezone.utc),
+        )
+    ]
+    now = datetime(2026, 6, 20, 15, 0, tzinfo=timezone.utc)
+    risk = RiskManager(blackout_windows=windows)
+
+    order = risk.evaluate(
+        _futures_signal(side="BUY", entry=100.0, stop_loss=95.0),
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=5,
+        now=now,
+    )
+
+    assert order is not None
+    assert risk.last_rejection_reason is None
 
 
 def test_short_liquidation_guard_rejects(risk):

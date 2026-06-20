@@ -64,21 +64,81 @@ class PaperFuturesExchange(Exchange):
         filled.status = "FILLED"
         return filled
 
-    def _realize(self, key, pos, exit_price, reason):
+    def _position_key_for_symbol(self, symbol):
+        return next((key for key in self._positions if key[0] == symbol), None)
+
+    def _realize(self, key, pos, exit_price, reason, quantity: float | None = None):
         from datetime import datetime, timezone
-        pnl = realized_pnl(pos.side, pos.entry_price, exit_price, pos.quantity)
-        notional = exit_price * pos.quantity
+        close_qty = min(quantity if quantity is not None else pos.quantity, pos.quantity)
+        original_qty = pos.quantity
+        pnl = realized_pnl(pos.side, pos.entry_price, exit_price, close_qty)
+        notional = exit_price * close_qty
+        margin = self._margin.get(key, 0.0)
+        released_margin = margin * (close_qty / original_qty) if original_qty else 0.0
         self._balance["USDT"] = (self._balance.get("USDT", 0.0)
-                                 + self._margin.pop(key, 0.0) + pnl
+                                 + released_margin + pnl
                                  - notional * self._fee_rate)
         self.closed_trades.append(TradeRecord(
             symbol=pos.symbol, side="SELL" if pos.side == "LONG" else "BUY",
-            entry_price=pos.entry_price, exit_price=exit_price, quantity=pos.quantity,
+            entry_price=pos.entry_price, exit_price=exit_price, quantity=close_qty,
             realized_pnl=pnl, entry_time=datetime.now(timezone.utc),
             exit_time=datetime.now(timezone.utc), exit_reason=reason,
             strategy_id=pos.strategy_id,
         ))
-        del self._positions[key]
+        remaining_qty = original_qty - close_qty
+        if remaining_qty <= 0:
+            self._margin.pop(key, None)
+            del self._positions[key]
+        else:
+            self._margin[key] = margin - released_margin
+            pos.quantity = remaining_qty
+
+    async def partial_take_profit(self, symbol, side, quantity, current_price=0.0) -> Order:
+        key = self._position_key_for_symbol(symbol)
+        exit_side = "SELL" if side.upper() == "LONG" else "BUY"
+        order = Order(
+            id=f"ptp-{symbol}",
+            symbol=symbol,
+            side=exit_side,
+            type="MARKET",
+            quantity=quantity,
+            price=None,
+            status="PENDING",
+            exchange_order_id=None,
+            reduce_only=True,
+        )
+        if key is None:
+            order.status = "FAILED"
+            return order
+        pos = self._positions[key]
+        close_qty = min(quantity, pos.quantity)
+        fill = self._fill_price(exit_side, current_price)
+        self._realize(key, pos, fill, "TP", quantity=close_qty)
+        order.quantity = close_qty
+        order.exchange_order_id = str(uuid.uuid4())
+        order.status = "FILLED"
+        return order
+
+    async def move_stop_to_breakeven(self, symbol, side, quantity, entry_price,
+                                     old_stop_order_id) -> Order:
+        key = self._position_key_for_symbol(symbol)
+        exit_side = "SELL" if side.upper() == "LONG" else "BUY"
+        order = Order(
+            id=f"be-{symbol}",
+            symbol=symbol,
+            side=exit_side,
+            type="STOP_MARKET",
+            quantity=quantity,
+            price=entry_price,
+            status="OPEN",
+            exchange_order_id=str(uuid.uuid4()),
+            reduce_only=True,
+        )
+        if key is None:
+            order.status = "FAILED"
+            return order
+        self._positions[key].stop_loss = entry_price
+        return order
 
     async def protect_position(self, symbol, side, quantity, take_profit, stop_loss,
                                current_price=0.0, strategy_id=""):

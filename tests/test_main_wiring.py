@@ -60,3 +60,32 @@ def test_live_spot_loop_reuses_spot_exchange():
     ex = factory(cfg, settings, spot_exchange)
 
     assert ex is spot_exchange
+
+
+def test_futures_engine_kwargs_include_slippage_pad_from_env(monkeypatch):
+    factory = getattr(main, "_futures_engine_kwargs", None)
+    assert factory is not None
+    monkeypatch.setenv("LIQ_SLIPPAGE_PAD", "0.05")
+    cfg = SimpleNamespace(
+        market="futures",
+        leverage=3,
+        risk_per_trade=0.01,
+        max_hold_hours=12,
+        reentry_cooldown_bars=2,
+        funding_skip_threshold=0.0015,
+    )
+
+    kwargs = factory(cfg)
+
+    assert kwargs["slippage_pad"] == 0.05
+
+
+def test_parse_correlation_groups_from_env():
+    parser = getattr(main, "_parse_correlation_groups", None)
+    assert parser is not None
+
+    groups = parser("BTC/USDT,ETH/USDT;SOL/USDT,AVAX/USDT")
+
+    assert groups == [{"BTC/USDT", "ETH/USDT"}, {"SOL/USDT", "AVAX/USDT"}]
+    assert parser("") is None
+    assert parser(None) is None

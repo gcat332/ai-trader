@@ -3,6 +3,7 @@ import logging
 import ccxt.async_support as ccxt
 from core.models import Order, Position
 from exchange.base import Exchange
+from exchange.futures_math import MMR_DEFAULT
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +49,37 @@ class BinanceFuturesExchange(Exchange):
         data = await self._exchange.fetch_funding_rate(symbol)
         return float(data.get("fundingRate") or 0.0)
 
+    async def maintenance_margin_rate(self, symbol: str) -> float:
+        try:
+            tiers = await self._exchange.fetch_leverage_tiers([symbol])
+            rows = tiers.get(symbol) if isinstance(tiers, dict) else tiers
+            if rows:
+                return float(rows[0].get("maintenanceMarginRate") or MMR_DEFAULT)
+        except Exception:
+            pass
+        return MMR_DEFAULT
+
     async def get_balance(self) -> dict[str, float]:
         raw = await self._exchange.fetch_balance()
         usdt = raw.get("USDT", {})
         free = float(usdt.get("free", 0.0)) if isinstance(usdt, dict) else 0.0
         return {"USDT": free}
+
+    async def verify_account_mode(self) -> None:
+        """Raise ValueError if account is in hedge (dual-side) mode. One-way mode required for live trading."""
+        try:
+            mode = await self._exchange.fetch_position_mode()
+        except Exception as exc:
+            raise ValueError(f"Could not verify position mode: {exc}") from exc
+        flag = mode.get("dualSidePosition")
+        if flag is None:
+            # Fail-closed: a missing signal is NOT a one-way signal. Refuse to arm.
+            raise ValueError(f"Could not verify position mode: missing dualSidePosition in {mode!r}")
+        if flag:
+            raise ValueError(
+                "Account is in HEDGE mode (dualSidePosition=True). "
+                "Switch to one-way mode before arming live futures trading."
+            )
 
     async def _ensure_symbol_config(self, symbol: str) -> int:
         """Set one-way mode + isolated margin + leverage for a symbol, once, serialized.
@@ -183,6 +210,59 @@ class BinanceFuturesExchange(Exchange):
             except Exception:
                 pass
         return protective
+
+    async def partial_take_profit(self, symbol, side, quantity, current_price=0.0) -> Order:
+        exit_side = "sell" if side.upper() == "LONG" else "buy"
+        amount = self._round_amount(symbol, quantity)
+        result = await self._exchange.create_order(
+            symbol=symbol,
+            type="market",
+            side=exit_side,
+            amount=amount,
+            price=None,
+            params={"reduceOnly": True, "positionSide": "BOTH"},
+        )
+        return Order(
+            id=f"ptp-{symbol}",
+            symbol=symbol,
+            side=exit_side.upper(),
+            type="MARKET",
+            quantity=amount,
+            price=None,
+            status="FILLED" if result.get("status") == "closed" else "OPEN",
+            exchange_order_id=str(result.get("id", "")),
+            reduce_only=True,
+        )
+
+    async def move_stop_to_breakeven(self, symbol, side, quantity, entry_price,
+                                     old_stop_order_id) -> Order:
+        exit_side = "sell" if side.upper() == "LONG" else "buy"
+        new_stop = await self._exchange.create_order(
+            symbol=symbol,
+            type="STOP_MARKET",
+            side=exit_side,
+            amount=None,
+            price=None,
+            params={
+                "closePosition": True,
+                "workingType": "MARK_PRICE",
+                "positionSide": "BOTH",
+                "stopPrice": self._exchange.price_to_precision(symbol, entry_price),
+            },
+        )
+        if old_stop_order_id:
+            await self.cancel_order(old_stop_order_id, symbol)
+        return Order(
+            id=f"be-{symbol}",
+            symbol=symbol,
+            side=exit_side.upper(),
+            type="STOP_MARKET",
+            quantity=quantity,
+            price=entry_price,
+            status="OPEN",
+            exchange_order_id=str(new_stop.get("id", "")),
+            reduce_only=True,
+        )
 
     async def cancel_order(self, order_id: str, symbol: str) -> None:
         try:

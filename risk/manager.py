@@ -1,5 +1,8 @@
 # risk/manager.py
 import uuid
+from datetime import datetime, timezone
+
+from core.macro_blackout import in_blackout
 from core.models import Order
 from exchange.futures_math import MMR_DEFAULT, liquidation_price
 
@@ -14,6 +17,8 @@ class RiskManager:
         confidence_threshold: float = 0.6,
         max_drawdown_limit_pct: float | None = None,
         max_exposure_pct: float | None = None,
+        correlation_groups: list[set[str]] | None = None,
+        blackout_windows: list[tuple[datetime, datetime]] | None = None,
     ):
         self._max_position_pct = max_position_pct
         self._max_open_positions = max_open_positions
@@ -21,6 +26,8 @@ class RiskManager:
         self._confidence_threshold = confidence_threshold
         self._max_drawdown_limit_pct = max_drawdown_limit_pct
         self._max_exposure_pct = max_exposure_pct
+        self._correlation_groups = correlation_groups or [{"BTC/USDT", "ETH/USDT"}]
+        self._blackout_windows = blackout_windows or []
         self._daily_start_balance: float | None = None
         self._current_balance: float | None = None
         self._peak_balance: float | None = None
@@ -91,8 +98,10 @@ class RiskManager:
         risk_per_trade=None,
         mmr=MMR_DEFAULT,
         liq_buffer_pct=0.0,
+        slippage_pad=0.0,
         funding_rate=0.0,
         funding_threshold=0.001,
+        now: datetime | None = None,
     ) -> Order | None:
         self._last_rejection_reason = None
         if self._global_kill_switch:
@@ -146,9 +155,14 @@ class RiskManager:
             self._last_rejection_reason = "re_entry"
             return None
 
-        _CORRELATED = {"BTC/USDT", "ETH/USDT"}
-        if opening and signal.symbol in _CORRELATED:
-            if any(p.symbol in _CORRELATED and p.symbol != signal.symbol for p in positions):
+        if opening and self._blackout_windows:
+            if in_blackout(self._blackout_windows, now or datetime.now(timezone.utc)):
+                self._last_rejection_reason = "macro_blackout"
+                return None
+
+        group = next((g for g in self._correlation_groups if signal.symbol in g), None)
+        if opening and group is not None:
+            if any(p.symbol in group and p.symbol != signal.symbol for p in positions):
                 self._last_rejection_reason = "correlation_filter"
                 return None
 
@@ -172,7 +186,8 @@ class RiskManager:
 
             side_ls = "LONG" if signal.side == "BUY" else "SHORT"
             liq = liquidation_price(side_ls, signal.entry_price, leverage, mmr)
-            buffered_liq = liq * (1 - liq_buffer_pct) if side_ls == "LONG" else liq * (1 + liq_buffer_pct)
+            eff_buffer = liq_buffer_pct + slippage_pad
+            buffered_liq = liq * (1 + eff_buffer) if side_ls == "LONG" else liq * (1 - eff_buffer)
             if side_ls == "LONG" and signal.stop_loss <= buffered_liq:
                 self._last_rejection_reason = "liquidation_too_close"
                 return None
