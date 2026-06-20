@@ -247,7 +247,7 @@ class BinanceFuturesExchange(Exchange):
                 "closePosition": True,
                 "workingType": "MARK_PRICE",
                 "positionSide": "BOTH",
-                "stopPrice": entry_price,
+                "stopPrice": self._exchange.price_to_precision(symbol, entry_price),
             },
         )
         if old_stop_order_id:
