@@ -19,6 +19,22 @@ def fx():
         yield BinanceFuturesExchange(api_key="k", api_secret="s", testnet=True, leverage=5)
 
 
+@pytest.mark.asyncio
+async def test_verify_account_mode_raises_on_hedge(fx):
+    fx._exchange.fetch_position_mode = AsyncMock(return_value={"dualSidePosition": True})
+
+    with pytest.raises(ValueError, match="HEDGE"):
+        await fx.verify_account_mode()
+
+
+@pytest.mark.asyncio
+async def test_verify_account_mode_wraps_fetch_error(fx):
+    fx._exchange.fetch_position_mode = AsyncMock(side_effect=Exception("binance unavailable"))
+
+    with pytest.raises(ValueError, match="Could not verify position mode: binance unavailable"):
+        await fx.verify_account_mode()
+
+
 def _order(side, qty, reduce_only=False):
     return Order(id="o1", symbol="BTC/USDT", side=side, type="MARKET", quantity=qty,
                  price=None, status="PENDING", exchange_order_id=None, reduce_only=reduce_only)

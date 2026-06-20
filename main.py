@@ -124,6 +124,16 @@ def _validate_go_live_safety(
         raise ValueError("API_KEY is required when API_HOST is not localhost for LIVE trading")
 
 
+async def _verify_futures_accounts(loop_specs, paper_mode: bool) -> None:
+    """Pre-arm: every LIVE futures loop's exchange must be in one-way mode. Raises to abort startup."""
+    if paper_mode:
+        return
+    from exchange.binance_futures import BinanceFuturesExchange
+    for spec in loop_specs:
+        if getattr(spec.config, "market", "spot") == "futures" and isinstance(spec.exchange, BinanceFuturesExchange):
+            await spec.exchange.verify_account_mode()
+
+
 async def _run_notifier_forever(notifier: TelegramNotifier, check_interval: float = 60.0) -> None:
     await notifier.start()
     try:
@@ -246,6 +256,7 @@ async def run():
                 if paper_mode
                 else _build_live_exchange_for(spec.config, settings, exchange)
             )
+        await _verify_futures_accounts(loop_specs, paper_mode)
 
         allocation_manager = AllocationManager({
             spec.config.loop_id: spec.config.allocation_pct

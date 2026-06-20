@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -102,3 +103,26 @@ def test_backtest_runtime_is_not_scheduled():
 
     assert _runtime_is_scheduled(live) is True
     assert _runtime_is_scheduled(backtest) is False
+
+
+@pytest.mark.asyncio
+async def test_verify_futures_accounts_raises_on_hedge():
+    from main import _verify_futures_accounts
+    from exchange.binance_futures import BinanceFuturesExchange
+
+    ex = AsyncMock(spec=BinanceFuturesExchange)
+    ex.verify_account_mode = AsyncMock(side_effect=ValueError("HEDGE mode"))
+    spec = SimpleNamespace(config=SimpleNamespace(market="futures"), exchange=ex)
+
+    with pytest.raises(ValueError, match="HEDGE"):
+        await _verify_futures_accounts([spec], paper_mode=False)
+
+
+@pytest.mark.asyncio
+async def test_verify_futures_accounts_skips_paper_and_spot():
+    from main import _verify_futures_accounts
+
+    spec_spot = SimpleNamespace(config=SimpleNamespace(market="spot"), exchange=AsyncMock())
+
+    await _verify_futures_accounts([spec_spot], paper_mode=False)
+    await _verify_futures_accounts([spec_spot], paper_mode=True)

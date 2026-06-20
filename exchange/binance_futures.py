@@ -54,6 +54,18 @@ class BinanceFuturesExchange(Exchange):
         free = float(usdt.get("free", 0.0)) if isinstance(usdt, dict) else 0.0
         return {"USDT": free}
 
+    async def verify_account_mode(self) -> None:
+        """Raise ValueError if account is in hedge (dual-side) mode. One-way mode required for live trading."""
+        try:
+            mode = await self._exchange.fetch_position_mode()
+        except Exception as exc:
+            raise ValueError(f"Could not verify position mode: {exc}") from exc
+        if mode.get("dualSidePosition"):
+            raise ValueError(
+                "Account is in HEDGE mode (dualSidePosition=True). "
+                "Switch to one-way mode before arming live futures trading."
+            )
+
     async def _ensure_symbol_config(self, symbol: str) -> int:
         """Set one-way mode + isolated margin + leverage for a symbol, once, serialized.
         Leverage/margin-mode are per-symbol ACCOUNT state (not per-order), so two loops
