@@ -3,7 +3,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from pandas import DataFrame
 from unittest.mock import AsyncMock
-from core.models import Order, Signal
+from core.models import Order, Position, Signal
 from core.engine import Engine
 from exchange.paper import PaperExchange
 from exchange.paper_futures import PaperFuturesExchange
@@ -83,6 +83,24 @@ class CapturingPaperFuturesExchange(PaperFuturesExchange):
     ) -> Order:
         self.orders.append(Order(**order.__dict__))
         return await super().place_order(order, current_price, stop_price)
+
+
+class LiveShapePaperFuturesExchange(CapturingPaperFuturesExchange):
+    def seed_live_long(self, symbol: str = "BTC/USDT") -> None:
+        self._positions[(symbol, "")] = Position(
+            symbol=symbol,
+            side="LONG",
+            entry_price=65000.0,
+            quantity=0.01,
+            unrealized_pnl=0.0,
+            take_profit=None,
+            stop_loss=None,
+            mode="FUTURES",
+            strategy_id="",
+            leverage=self._leverage,
+            liquidation_price=None,
+        )
+        self._margin[(symbol, "")] = 325.0
 
 
 @pytest.mark.asyncio
@@ -235,6 +253,52 @@ async def test_futures_sell_signal_opens_short():
     assert positions[0].strategy_id == "futures_short"
     assert exchange.orders[0].side == "SELL"
     assert exchange.orders[0].reduce_only is False
+
+
+@pytest.mark.asyncio
+async def test_futures_opposite_close_matches_position_with_empty_strategy_id():
+    exchange = LiveShapePaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.seed_live_long()
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysSellStrategy(strategy_id="loop1:supertrend"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=RiskManager(),
+        market="futures",
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    assert any(
+        order.side == "SELL" and order.reduce_only is True
+        for order in exchange.orders
+    )
+    assert [
+        order for order in exchange.orders if order.reduce_only is False
+    ] == []
+
+
+@pytest.mark.asyncio
+async def test_futures_same_side_reentry_blocked_with_empty_strategy_id():
+    exchange = LiveShapePaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.seed_live_long()
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="loop1:supertrend"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=RiskManager(),
+        market="futures",
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    assert exchange.orders == []
 
 
 @pytest.mark.asyncio
