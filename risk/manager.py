@@ -91,6 +91,7 @@ class RiskManager:
         risk_per_trade=None,
         mmr=MMR_DEFAULT,
         liq_buffer_pct=0.0,
+        slippage_pad=0.0,
         funding_rate=0.0,
         funding_threshold=0.001,
     ) -> Order | None:
@@ -172,7 +173,12 @@ class RiskManager:
 
             side_ls = "LONG" if signal.side == "BUY" else "SHORT"
             liq = liquidation_price(side_ls, signal.entry_price, leverage, mmr)
-            buffered_liq = liq * (1 - liq_buffer_pct) if side_ls == "LONG" else liq * (1 + liq_buffer_pct)
+            eff_buffer = liq_buffer_pct + slippage_pad
+            slippage_delta = eff_buffer - liq_buffer_pct
+            if side_ls == "LONG":
+                buffered_liq = liq * (1 - liq_buffer_pct + slippage_delta)
+            else:
+                buffered_liq = liq * (1 + liq_buffer_pct - slippage_delta)
             if side_ls == "LONG" and signal.stop_loss <= buffered_liq:
                 self._last_rejection_reason = "liquidation_too_close"
                 return None

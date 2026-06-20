@@ -359,3 +359,26 @@ Notes for Next Agent: risk/manager.py already accepted mmr from M1, so productio
 risk code was not changed. Existing untracked package.json and package-lock.json
 were not modified.
 ---
+---
+Timestamp: 2026-06-20 13:57:15 +0700
+Agent: Codex
+Task: Implement Futures M3 Task 5 slippage pad on pre-trade liquidation guard
+Files Modified: risk/manager.py, core/engine.py, main.py,
+tests/test_risk_manager.py, tests/test_engine.py, tests/test_main_wiring.py,
+.superpowers/sdd/task-5-report.md, changes.log
+Summary of Changes: Added slippage_pad to RiskManager.evaluate, Engine wiring,
+and futures engine kwargs from LIQ_SLIPPAGE_PAD. Added the SOL/USDT straddle
+test verifying liquidation_price("LONG", 100.0, 10, 0.005) == 90.5 so
+slippage_pad=0.0 passes while slippage_pad=0.05 rejects with
+liquidation_too_close. Added engine pass-through and main env threading tests.
+Validation: Red phase .venv/bin/python -m pytest tests/test_risk_manager.py -q
+-> 1 failed, 39 passed; .venv/bin/python -m pytest tests/test_engine.py -k
+slippage_pad -q -> 1 failed; .venv/bin/python -m pytest tests/test_main_wiring.py
+-k slippage_pad -q -> 1 failed. Green phase .venv/bin/python -m pytest
+tests/test_risk_manager.py -q -> 40 passed. Focused wiring tests each passed.
+Full suite .venv/bin/python -m pytest -q -> 495 passed, 6 skipped, 1 warning.
+Notes for Next Agent: Existing no-pad liquidation guard behavior is preserved;
+only the new slippage_pad tightens the guard toward the slippage-adjusted
+liquidation side. Existing untracked package.json and package-lock.json were not
+modified.
+---

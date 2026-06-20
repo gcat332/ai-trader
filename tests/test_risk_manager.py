@@ -358,6 +358,43 @@ def test_higher_mmr_straddles_liquidation_guard(risk):
     assert risk.last_rejection_reason == "liquidation_too_close"
 
 
+def test_slippage_pad_widens_liq_guard(risk):
+    entry = 100.0
+    leverage = 10
+    mmr = 0.005
+    stop_loss = 92.0
+    signal = _futures_signal(side="BUY", entry=entry, stop_loss=stop_loss, confidence=0.9)
+
+    liq = liquidation_price("LONG", entry, leverage, mmr)
+    assert liq == pytest.approx(90.5)
+    assert liq < stop_loss
+
+    accepted = risk.evaluate(
+        signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=leverage,
+        risk_per_trade=0.01,
+        mmr=mmr,
+        slippage_pad=0.0,
+    )
+    rejected = risk.evaluate(
+        signal,
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=leverage,
+        risk_per_trade=0.01,
+        mmr=mmr,
+        slippage_pad=0.05,
+    )
+
+    assert accepted is not None
+    assert rejected is None
+    assert risk.last_rejection_reason == "liquidation_too_close"
+
+
 def test_short_liquidation_guard_rejects(risk):
     sell_signal = Signal(
         symbol="BTC/USDT",

@@ -597,6 +597,29 @@ async def test_futures_engine_passes_exchange_maintenance_margin_rate_to_risk():
 
 
 @pytest.mark.asyncio
+async def test_futures_engine_passes_slippage_pad_to_risk():
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
+    risk_manager = RecordingRiskManager()
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_slippage_pad"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=risk_manager,
+        market="futures",
+        leverage=2,
+        slippage_pad=0.05,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+
+    assert risk_manager.calls[0][1]["slippage_pad"] == 0.05
+
+
+@pytest.mark.asyncio
 async def test_futures_engine_uses_default_mmr_when_exchange_lacks_tier_method():
     exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
     exchange.fetch_funding_rate = AsyncMock(return_value=0.0)

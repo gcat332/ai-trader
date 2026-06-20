@@ -78,6 +78,19 @@ def _build_live_exchange_for(cfg, settings, spot_exchange):
     return spot_exchange
 
 
+def _futures_engine_kwargs(cfg) -> dict:
+    return {
+        "market": cfg.market,
+        "leverage": cfg.leverage,
+        "risk_per_trade": cfg.risk_per_trade,
+        "max_hold_hours": cfg.max_hold_hours,
+        "reentry_cooldown_bars": cfg.reentry_cooldown_bars,
+        "funding_skip_threshold": cfg.funding_skip_threshold,
+        "liq_buffer_pct": float(os.getenv("LIQ_BUFFER_PCT", "0.0")),
+        "slippage_pad": float(os.getenv("LIQ_SLIPPAGE_PAD", "0.0")),
+    }
+
+
 def _runtime_is_scheduled(runtime_config) -> bool:
     return runtime_config.mode != "BACKTEST"
 
@@ -295,15 +308,7 @@ async def run():
             for spec in loop_specs:
                 engine_kwargs = {}
                 if spec.config.market == "futures":
-                    engine_kwargs = {
-                        "market": spec.config.market,
-                        "leverage": spec.config.leverage,
-                        "risk_per_trade": spec.config.risk_per_trade,
-                        "max_hold_hours": spec.config.max_hold_hours,
-                        "reentry_cooldown_bars": spec.config.reentry_cooldown_bars,
-                        "funding_skip_threshold": spec.config.funding_skip_threshold,
-                        "liq_buffer_pct": float(os.getenv("LIQ_BUFFER_PCT", "0.0")),
-                    }
+                    engine_kwargs = _futures_engine_kwargs(spec.config)
                 spec.engine = Engine(
                     exchange=spec.exchange,
                     strategy=spec.strategy,

@@ -39,6 +39,7 @@ class Engine:
         reentry_cooldown_bars: int = 0,
         funding_skip_threshold: float = 0.001,
         liq_buffer_pct: float = 0.0,
+        slippage_pad: float = 0.0,
     ):
         self.exchange = exchange
         self.strategy = strategy
@@ -57,6 +58,7 @@ class Engine:
         self._reentry_cooldown_bars = reentry_cooldown_bars
         self._funding_skip_threshold = funding_skip_threshold
         self._liq_buffer_pct = liq_buffer_pct
+        self._slippage_pad = slippage_pad
         self._cooldown: dict[tuple[str, str], int] = {}
         self._opened_at: dict[tuple[str, str], datetime] = {}
         self.is_running: bool = True
@@ -350,6 +352,7 @@ class Engine:
                 funding_rate=funding_rate,
                 funding_threshold=self._funding_skip_threshold,
                 liq_buffer_pct=self._liq_buffer_pct,
+                slippage_pad=self._slippage_pad,
             )
             rejection = self._risk_manager.last_rejection_reason
         else:
