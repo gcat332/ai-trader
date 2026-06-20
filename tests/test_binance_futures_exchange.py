@@ -35,6 +35,21 @@ async def test_verify_account_mode_wraps_fetch_error(fx):
         await fx.verify_account_mode()
 
 
+@pytest.mark.asyncio
+async def test_verify_account_mode_ok_on_one_way(fx):
+    fx._exchange.fetch_position_mode = AsyncMock(return_value={"dualSidePosition": False})
+
+    await fx.verify_account_mode()  # one-way -> must not raise
+
+
+@pytest.mark.asyncio
+async def test_verify_account_mode_fails_closed_on_missing_flag(fx):
+    fx._exchange.fetch_position_mode = AsyncMock(return_value={})  # malformed: no flag
+
+    with pytest.raises(ValueError, match="missing dualSidePosition"):
+        await fx.verify_account_mode()
+
+
 def _order(side, qty, reduce_only=False):
     return Order(id="o1", symbol="BTC/USDT", side=side, type="MARKET", quantity=qty,
                  price=None, status="PENDING", exchange_order_id=None, reduce_only=reduce_only)

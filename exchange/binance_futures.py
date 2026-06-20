@@ -60,7 +60,11 @@ class BinanceFuturesExchange(Exchange):
             mode = await self._exchange.fetch_position_mode()
         except Exception as exc:
             raise ValueError(f"Could not verify position mode: {exc}") from exc
-        if mode.get("dualSidePosition"):
+        flag = mode.get("dualSidePosition")
+        if flag is None:
+            # Fail-closed: a missing signal is NOT a one-way signal. Refuse to arm.
+            raise ValueError(f"Could not verify position mode: missing dualSidePosition in {mode!r}")
+        if flag:
             raise ValueError(
                 "Account is in HEDGE mode (dualSidePosition=True). "
                 "Switch to one-way mode before arming live futures trading."
