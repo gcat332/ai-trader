@@ -437,6 +437,80 @@ def test_slippage_pad_widens_liq_guard(risk):
     assert risk.last_rejection_reason == "liquidation_too_close"
 
 
+def test_macro_blackout_blocks_open_inside_window():
+    windows = [
+        (
+            datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc),
+            datetime(2026, 6, 20, 14, 0, tzinfo=timezone.utc),
+        )
+    ]
+    now = datetime(2026, 6, 20, 13, 0, tzinfo=timezone.utc)
+    risk = RiskManager(blackout_windows=windows)
+
+    order = risk.evaluate(
+        _futures_signal(side="BUY", entry=100.0, stop_loss=95.0),
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=5,
+        now=now,
+    )
+
+    assert order is None
+    assert risk.last_rejection_reason == "macro_blackout"
+
+
+def test_macro_blackout_does_not_block_exit_inside_window():
+    windows = [
+        (
+            datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc),
+            datetime(2026, 6, 20, 14, 0, tzinfo=timezone.utc),
+        )
+    ]
+    now = datetime(2026, 6, 20, 13, 0, tzinfo=timezone.utc)
+    risk = RiskManager(blackout_windows=windows)
+    sell_signal = Signal(
+        symbol="BTC/USDT",
+        side="SELL",
+        entry_price=65000.0,
+        take_profit=63000.0,
+        stop_loss=67000.0,
+        trailing_sl=False,
+        confidence=0.8,
+        strategy_id="rsi_macd",
+        timestamp=datetime.now(timezone.utc),
+    )
+    position = _open_position("BTC/USDT", strategy_id="rsi_macd")
+
+    order = risk.evaluate(sell_signal, {"USDT": 10000.0}, [position], now=now)
+
+    assert order is not None
+    assert risk.last_rejection_reason is None
+
+
+def test_macro_blackout_allows_open_outside_window():
+    windows = [
+        (
+            datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc),
+            datetime(2026, 6, 20, 14, 0, tzinfo=timezone.utc),
+        )
+    ]
+    now = datetime(2026, 6, 20, 15, 0, tzinfo=timezone.utc)
+    risk = RiskManager(blackout_windows=windows)
+
+    order = risk.evaluate(
+        _futures_signal(side="BUY", entry=100.0, stop_loss=95.0),
+        {"USDT": 1000.0},
+        [],
+        market="futures",
+        leverage=5,
+        now=now,
+    )
+
+    assert order is not None
+    assert risk.last_rejection_reason is None
+
+
 def test_short_liquidation_guard_rejects(risk):
     sell_signal = Signal(
         symbol="BTC/USDT",

@@ -25,6 +25,7 @@ from core.engine import Engine
 from core.live_controller import LiveEngineController
 from core.loop_config import parse_loops, parse_runtime_configs
 from core.loop_config import validate_loop_leverage_consistency
+from core.macro_blackout import load_blackout
 from core.supervisor import run_supervised
 from core.strategy_factory import build_runtime_strategy, build_strategy
 from core.strategy_manager import StrategyManager
@@ -311,6 +312,7 @@ async def run():
             max_drawdown_limit_pct=_optional_float_env("MAX_DRAWDOWN_LIMIT_PCT"),
             max_exposure_pct=_optional_float_env("MAX_EXPOSURE_PCT"),
             correlation_groups=_parse_correlation_groups(os.getenv("CORRELATION_GROUPS")),
+            blackout_windows=load_blackout(os.getenv("MACRO_BLACKOUT_FILE", "config/macro_blackout.json")),
         )
 
         async with aiosqlite.connect("db/trades.db") as conn:
