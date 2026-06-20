@@ -20,6 +20,20 @@ def _buy_signal(confidence: float = 0.8, stop_loss: float | None = 63500.0) -> S
     )
 
 
+def _buy_signal_for(symbol: str, entry: float = 100.0, stop_loss: float = 95.0) -> Signal:
+    return Signal(
+        symbol=symbol,
+        side="BUY",
+        entry_price=entry,
+        take_profit=entry * 1.03,
+        stop_loss=stop_loss,
+        trailing_sl=False,
+        confidence=0.8,
+        strategy_id="rsi_macd",
+        timestamp=datetime.now(timezone.utc),
+    )
+
+
 def _futures_signal(
     side: str = "BUY",
     entry: float = 100.0,
@@ -167,6 +181,34 @@ def test_correlation_filter_blocks_eth_when_btc_open(risk):
         confidence=0.8, strategy_id="rsi_macd", timestamp=datetime.now(timezone.utc),
     )
     assert risk.evaluate(eth_signal, {"USDT": 10000.0}, [btc_pos]) is None
+
+
+def test_default_correlation_groups_block_btc_when_eth_open(risk):
+    eth_pos = _open_position("ETH/USDT")
+
+    assert risk.evaluate(_buy_signal_for("BTC/USDT"), {"USDT": 10000.0}, [eth_pos]) is None
+    assert risk.last_rejection_reason == "correlation_filter"
+
+
+def test_custom_correlation_group_blocks_within_group():
+    risk = RiskManager(correlation_groups=[{"SOL/USDT", "AVAX/USDT"}])
+    sol_pos = _open_position("SOL/USDT")
+
+    assert risk.evaluate(_buy_signal_for("AVAX/USDT"), {"USDT": 10000.0}, [sol_pos]) is None
+    assert risk.last_rejection_reason == "correlation_filter"
+
+
+def test_custom_correlation_group_does_not_block_symbol_outside_group():
+    risk = RiskManager(correlation_groups=[{"SOL/USDT", "AVAX/USDT"}])
+    sol_pos = _open_position("SOL/USDT")
+
+    assert risk.evaluate(_buy_signal_for("BTC/USDT"), {"USDT": 10000.0}, [sol_pos]) is not None
+
+
+def test_default_correlation_groups_do_not_block_sol(risk):
+    eth_pos = _open_position("ETH/USDT")
+
+    assert risk.evaluate(_buy_signal_for("SOL/USDT"), {"USDT": 10000.0}, [eth_pos]) is not None
 
 
 def test_confidence_scaled_sizing(risk):

@@ -57,6 +57,17 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_correlation_groups(raw: str | None) -> list[set[str]] | None:
+    if raw is None or raw == "":
+        return None
+    groups = []
+    for group_raw in raw.split(";"):
+        group = {symbol.strip() for symbol in group_raw.split(",") if symbol.strip()}
+        if group:
+            groups.append(group)
+    return groups or None
+
+
 def _build_paper_exchange_for(cfg, initial_balance):
     """Build per-loop exchange for paper mode: PaperFuturesExchange if futures, else PaperExchange."""
     if getattr(cfg, "market", "spot") == "futures":
@@ -299,6 +310,7 @@ async def run():
             confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.6")),
             max_drawdown_limit_pct=_optional_float_env("MAX_DRAWDOWN_LIMIT_PCT"),
             max_exposure_pct=_optional_float_env("MAX_EXPOSURE_PCT"),
+            correlation_groups=_parse_correlation_groups(os.getenv("CORRELATION_GROUPS")),
         )
 
         async with aiosqlite.connect("db/trades.db") as conn:

@@ -78,3 +78,14 @@ def test_futures_engine_kwargs_include_slippage_pad_from_env(monkeypatch):
     kwargs = factory(cfg)
 
     assert kwargs["slippage_pad"] == 0.05
+
+
+def test_parse_correlation_groups_from_env():
+    parser = getattr(main, "_parse_correlation_groups", None)
+    assert parser is not None
+
+    groups = parser("BTC/USDT,ETH/USDT;SOL/USDT,AVAX/USDT")
+
+    assert groups == [{"BTC/USDT", "ETH/USDT"}, {"SOL/USDT", "AVAX/USDT"}]
+    assert parser("") is None
+    assert parser(None) is None

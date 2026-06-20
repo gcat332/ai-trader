@@ -14,6 +14,7 @@ class RiskManager:
         confidence_threshold: float = 0.6,
         max_drawdown_limit_pct: float | None = None,
         max_exposure_pct: float | None = None,
+        correlation_groups: list[set[str]] | None = None,
     ):
         self._max_position_pct = max_position_pct
         self._max_open_positions = max_open_positions
@@ -21,6 +22,7 @@ class RiskManager:
         self._confidence_threshold = confidence_threshold
         self._max_drawdown_limit_pct = max_drawdown_limit_pct
         self._max_exposure_pct = max_exposure_pct
+        self._correlation_groups = correlation_groups or [{"BTC/USDT", "ETH/USDT"}]
         self._daily_start_balance: float | None = None
         self._current_balance: float | None = None
         self._peak_balance: float | None = None
@@ -147,9 +149,9 @@ class RiskManager:
             self._last_rejection_reason = "re_entry"
             return None
 
-        _CORRELATED = {"BTC/USDT", "ETH/USDT"}
-        if opening and signal.symbol in _CORRELATED:
-            if any(p.symbol in _CORRELATED and p.symbol != signal.symbol for p in positions):
+        group = next((g for g in self._correlation_groups if signal.symbol in g), None)
+        if opening and group is not None:
+            if any(p.symbol in group and p.symbol != signal.symbol for p in positions):
                 self._last_rejection_reason = "correlation_filter"
                 return None
 
