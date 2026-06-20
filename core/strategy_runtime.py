@@ -29,6 +29,7 @@ class StrategyRuntimeConfig:
     risk_per_trade: float | None = None
     max_hold_hours: float | None = None
     reentry_cooldown_bars: int = 0
+    funding_skip_threshold: float = 0.001
 
 
 class RuntimeStrategyAdapter:

@@ -10,6 +10,8 @@ This repository uses a shared Claude Code + Codex workflow.
 - `CLAUDE.md` is for Claude Code.
 - `changes.log` is the shared append-only handoff log.
 - `project_context.md` is the shared project overview.
+- `HANDOFF.md` is the machine-portable handoff (branch state + how to continue on another machine).
+- `user_todo.md` is the human's pre-go-live checklist (what must happen before real-money trading).
 
 ## Before Starting Work
 

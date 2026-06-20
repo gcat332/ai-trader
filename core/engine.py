@@ -1,6 +1,7 @@
 # core/engine.py
 import asyncio
 import json
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,9 @@ from exchange.base import Exchange
 from risk.manager import RiskManager
 from strategy.base import BaseStrategy
 from strategy.regime import RegimeClassifier
+
+
+logger = logging.getLogger(__name__)
 
 
 class Engine:
@@ -32,6 +36,8 @@ class Engine:
         risk_per_trade: float | None = None,
         max_hold_hours: float | None = None,
         reentry_cooldown_bars: int = 0,
+        funding_skip_threshold: float = 0.001,
+        liq_buffer_pct: float = 0.0,
     ):
         self.exchange = exchange
         self.strategy = strategy
@@ -48,6 +54,8 @@ class Engine:
         self._risk_per_trade = risk_per_trade
         self._max_hold_hours = max_hold_hours
         self._reentry_cooldown_bars = reentry_cooldown_bars
+        self._funding_skip_threshold = funding_skip_threshold
+        self._liq_buffer_pct = liq_buffer_pct
         self._cooldown: dict[tuple[str, str], int] = {}
         self._opened_at: dict[tuple[str, str], datetime] = {}
         self.is_running: bool = True
@@ -134,6 +142,12 @@ class Engine:
             None,
         )
 
+    def _find_futures_position(self, positions, symbol: str):
+        # One-way USDT-M futures has ONE net position per symbol; the live venue
+        # returns it with no sub-strategy attribution (strategy_id=""). Match by
+        # symbol only so opposite-close / re-entry / max-hold work on the live adapter.
+        return next((p for p in positions if p.symbol == symbol), None)
+
     def _is_opposite_futures_signal(self, position, signal: Signal) -> bool:
         return (
             (position.side == "LONG" and signal.side == "SELL")
@@ -171,7 +185,7 @@ class Engine:
         opened_at = self._opened_at.get(key)
         position = None
         if opened_at is None:
-            position = self._find_position(positions, signal.symbol, signal.strategy_id)
+            position = self._find_futures_position(positions, signal.symbol)
             if position is None:
                 return False
             # ponytail: restart loses exact open time; re-seed from now so the position still ages out. Exact cross-restart age needs Position.entry_time (M2, live exchange).
@@ -182,7 +196,7 @@ class Engine:
         max_age = timedelta(hours=self._max_hold_hours)
         if datetime.now(timezone.utc) - opened_at < max_age:
             return False
-        position = position or self._find_position(positions, signal.symbol, signal.strategy_id)
+        position = position or self._find_futures_position(positions, signal.symbol)
         if position is None:
             self._opened_at.pop(key, None)
             return False
@@ -273,17 +287,21 @@ class Engine:
 
         if self._market == "futures":
             key = self._position_key(signal.symbol, signal.strategy_id)
-            held_position = self._find_position(
-                futures_positions,
-                signal.symbol,
-                signal.strategy_id,
-            )
+            held_position = self._find_futures_position(futures_positions, signal.symbol)
             if held_position is not None and self._is_opposite_futures_signal(
                 held_position,
                 signal,
             ):
                 await self._log_decision(signal, "PLACED", None, regime)
                 await self._close_futures_position(held_position, current_price)
+                return
+            if held_position is not None and not self._is_opposite_futures_signal(
+                held_position,
+                signal,
+            ):
+                # Same-side signal while already holding the symbol's net position:
+                # one-way mode nets, so opening again would just stack risk. Block it.
+                await self._log_decision(signal, "REJECTED", "re_entry", regime)
                 return
             if held_position is None and self._consume_entry_cooldown(key):
                 await self._log_decision(signal, "REJECTED", "reentry_cooldown", regime)
@@ -307,6 +325,13 @@ class Engine:
             if self._allocation_manager is not None and self._loop_id is not None:
                 balance = self._allocation_manager.scoped_balance(self._loop_id, balance)
             positions = await self.exchange.get_positions()
+            funding_rate = 0.0
+            if self._market == 'futures':
+                try:
+                    funding_rate = await self.exchange.fetch_funding_rate(self.symbol)
+                except Exception:
+                    funding_rate = 0.0
+
             order = self._risk_manager.evaluate(
                 signal,
                 balance,
@@ -314,6 +339,9 @@ class Engine:
                 market=self._market,
                 leverage=self._leverage,
                 risk_per_trade=self._risk_per_trade,
+                funding_rate=funding_rate,
+                funding_threshold=self._funding_skip_threshold,
+                liq_buffer_pct=self._liq_buffer_pct,
             )
             rejection = self._risk_manager.last_rejection_reason
         else:
@@ -364,6 +392,16 @@ class Engine:
                     strategy_id=signal.strategy_id,
                 )
                 self._arm_trailing(signal, order.quantity, current_price, prot)
+                if self._market == 'futures':
+                    try:
+                        action = await self.exchange.enforce_liquidation_buffer(
+                            self.symbol, current_price=current_price,
+                            buffer_pct=self._liq_buffer_pct, stop_loss=signal.stop_loss,
+                        )
+                        if action in ('margin_added', 'closed'):
+                            logger.warning('liq-buffer guard on %s: %s', self.symbol, action)
+                    except Exception as exc:
+                        logger.warning('liq-buffer guard failed on %s: %s', self.symbol, exc)
         else:
             await self._log_decision(signal, "REJECTED", rejection, regime)
 

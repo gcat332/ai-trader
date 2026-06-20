@@ -75,12 +75,64 @@ suite green + a paper run shows correct long/short/liquidation/PnL behavior.**
 ### Milestone M2 — Binance USDT-M testnet
 Reuses the M1 core unchanged; only adds the live adapter + wiring. **Gate:
 contract test green on futures testnet + a supervised testnet run reconciles real
-positions and respects the liquidation guard.**
-- `BinanceFuturesExchange` adapter (same `Exchange` ABC as the paper one).
-- Per-loop exchange isolation wiring in `main.py`.
-- **#3 Funding-rate awareness** — `fetch_funding_rate`; penalize/skip entries when
-  funding works against the side past a threshold; surface in Telegram.
-- Contract test on futures testnet (mirrors `tests/test_contract_binance_testnet.py`).
+positions and respects the liquidation guard.** Design decisions below were
+validated by an expert-trader design consult (verdict: GO-WITH-CHANGES); the
+trader's must-fixes are folded in here rather than discovered during implementation.
+
+- **`BinanceFuturesExchange` adapter** (`exchange/binance_futures.py`, same `Exchange`
+  ABC as paper/spot) — `ccxt.async_support.binance` with `defaultType:"future"`,
+  `fetchMarkets:["linear"]`, `set_sandbox_mode(testnet)`. One-way position mode
+  (`positionSide=BOTH` on every order); per-symbol `set_leverage` +
+  `set_margin_mode("isolated")`. Market entry; all exits `reduceOnly=True`.
+- **Protective TP/SL via `closePosition=true` brackets** (trader fix #1): a
+  `STOP_MARKET` + `TAKE_PROFIT_MARKET` each with `closePosition=true` (NOT two
+  fixed-qty reduce-only orders — those orphan the surviving leg and break on
+  partial fills). Binance auto-cancels a `closePosition` order when the position
+  reaches zero. Stop uses `workingType=MARK_PRICE` so the bot's stop and the
+  liquidation engine read the same price (trader fix #4).
+- **Stop-first, never-naked** (trader fix #3): after entry confirmation, place the
+  STOP before anything else; if stop placement fails, immediately market-close the
+  position (reduce-only) rather than hold it unprotected. Protective orders are
+  sized off the **actual filled quantity** read back from the entry fill, not the
+  intended quantity (trader fix #2).
+- **Liquidation = exchange truth.** `get_positions()` reads real `fetch_positions()`
+  including the venue-reported `liquidationPrice` and stores it on `Position` (no
+  formula). The pre-trade liquidation-distance guard estimates liq from real
+  **leverage tiers** (`fetchLeverageTiers()`, bias conservative) — NOT the flat
+  `0.005` MMR, which is too optimistic for alts (trader fix #6).
+- **Post-open liq-too-close → add margin, close as last resort** (trader fix #5):
+  if the real `liquidationPrice` lands inside the buffer after opening, add isolated
+  margin to push liq away (keep the thesis); only close if margin can't be added or
+  the stop sits beyond liq. Do NOT reflex-close on a single tight reading — that
+  chops trades on fees. The real defense is conservative pre-trade sizing.
+- **#3 Funding-rate awareness** — `fetch_funding_rate(symbol)` added to the
+  `Exchange` ABC (paper + spot return `0.0` → never block). Binary **skip** entry
+  when the side being opened would PAY funding (long & rate>0, short & rate<0) and
+  `abs(rate)` exceeds an **extreme** threshold `FUNDING_SKIP_THRESHOLD = 0.001`
+  (0.1%/8h — squeeze territory; cheap funding is noise vs trade EV and is not
+  hard-gated). Surface skips in Telegram.
+- **Per-symbol leverage/margin-mode race guard** (trader fix #8): `set_leverage` /
+  `set_margin_mode` are per-symbol account state, not per-order. Serialize changes
+  per symbol and read-back-verify actual leverage before sizing; rule: one symbol =
+  one leverage across all loops.
+- **mmr shared constant** (carryover #1): `MMR_DEFAULT = 0.005` lives once in
+  `exchange/futures_math.py`, imported by `risk/manager.py` + `exchange/paper_futures.py`
+  (paper + pre-trade estimate only; live uses tiers/exchange truth).
+- **Per-(market, network) exchange isolation** in `main.py` — select
+  `BinanceFuturesExchange` when `market=="futures"` on a live network; live spot
+  path unchanged.
+- **§9 supertrend short re-validation** — re-run the strategy selector on
+  `market="futures"` `PaperFuturesExchange` (SELL → short) to validate supertrend's
+  short-side edge, which the spot harness dropped. Read-only analysis; produces a
+  data verdict.
+- **Robustness (trader nice-to-haves, in-scope this milestone):** treat
+  reduce-only-with-no-position rejects (`-2022`) as benign/idempotent; round size to
+  step/min-notional before sending (skip if below min); funding paid/received feeds
+  the drawdown guardrail; startup reconciliation cancels orphaned protective orders
+  and re-places missing stops; ADL fills are reconciled against actual position (alert).
+- **Contract test** on futures testnet (`tests/test_contract_binance_futures_testnet.py`,
+  mirrors `tests/test_contract_binance_testnet.py`): set leverage/isolated → open →
+  protect → `fetch_positions` reports `liquidationPrice` → close reduce-only.
 
 ### Milestone M3 — Mainnet enablement + hardening
 **Gate: M1+M2 green and `docs/release-safety-validation-gate.md` satisfied before

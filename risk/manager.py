@@ -1,7 +1,7 @@
 # risk/manager.py
 import uuid
 from core.models import Order
-from exchange.futures_math import liquidation_price
+from exchange.futures_math import MMR_DEFAULT, liquidation_price
 
 
 class RiskManager:
@@ -89,8 +89,10 @@ class RiskManager:
         market="spot",
         leverage=1,
         risk_per_trade=None,
-        mmr=0.005,
+        mmr=MMR_DEFAULT,
         liq_buffer_pct=0.0,
+        funding_rate=0.0,
+        funding_threshold=0.001,
     ) -> Order | None:
         self._last_rejection_reason = None
         if self._global_kill_switch:
@@ -176,6 +178,14 @@ class RiskManager:
                 return None
             if side_ls == "SHORT" and signal.stop_loss >= buffered_liq:
                 self._last_rejection_reason = "liquidation_too_close"
+                return None
+
+            side_pays = (
+                (signal.side == "BUY" and funding_rate > 0)
+                or (signal.side == "SELL" and funding_rate < 0)
+            )
+            if abs(funding_rate) > funding_threshold and side_pays:
+                self._last_rejection_reason = "funding_adverse"
                 return None
 
         usdt = balance.get("USDT", 0.0)

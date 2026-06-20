@@ -70,6 +70,25 @@ def test_futures_loop_parsed():
     assert cfg.reentry_cooldown_bars == 1
 
 
+def test_funding_skip_threshold_defaults_when_unset():
+    env = {
+        "LOOP1_STRATEGY": "supertrend", "LOOP1_MODE": "PAPER",
+        "LOOP1_MARKET": "futures", "LOOP1_LEVERAGE": "5",
+    }
+    cfg = next(c for c in parse_runtime_configs(env) if c.loop_id != "legacy")
+    assert getattr(cfg, "funding_skip_threshold", None) == 0.001
+
+
+def test_funding_skip_threshold_parsed_from_loop_env():
+    env = {
+        "LOOP1_STRATEGY": "supertrend", "LOOP1_MODE": "PAPER",
+        "LOOP1_MARKET": "futures", "LOOP1_LEVERAGE": "5",
+        "LOOP1_FUNDING_SKIP_THRESHOLD": "0.002",
+    }
+    cfg = next(c for c in parse_runtime_configs(env) if c.loop_id != "legacy")
+    assert getattr(cfg, "funding_skip_threshold", None) == 0.002
+
+
 def test_spot_defaults_when_unset():
     env = {"LOOP1_STRATEGY": "rsi_macd", "LOOP1_MODE": "PAPER"}
     cfg = next(c for c in parse_runtime_configs(env) if c.loop_id != "legacy")

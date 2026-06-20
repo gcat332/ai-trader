@@ -307,3 +307,32 @@ Notes for Next Agent: Existing untracked package.json and package-lock.json were
 not modified. Long close PnL remains the same numerical formula via
 realized_pnl("LONG", entry, exit, qty).
 ---
+---
+Timestamp: 2026-06-20 08:59:06 +0700
+Agent: Codex
+Task: Fix live futures one-way position matching in engine
+Files Modified: core/engine.py, tests/test_engine.py,
+.superpowers/sdd/final-review-fix-report.md, changes.log
+Summary of Changes: Added TDD regressions for live-shaped futures positions with
+empty strategy_id, matched futures positions by symbol only in the futures-gated
+engine paths for opposite-close, max-hold, and held-position detection, and
+blocked same-side futures re-entry before risk evaluation. Spot strategy-scoped
+position matching and risk manager behavior were left unchanged.
+Validation: Red phase .venv/bin/python -m pytest tests/test_engine.py -q -> 2
+failed, 16 passed, 1 warning. Green phase .venv/bin/python -m pytest
+tests/test_engine.py -q -> 18 passed, 1 warning. Full suite
+.venv/bin/python -m pytest -q -> 474 passed, 6 skipped, 1 warning.
+Notes for Next Agent: Code/test commit succeeded at 7c0a241. The final review
+report and this handoff entry were written after that commit; pre-existing
+untracked package.json and package-lock.json were not modified.
+---
+---
+Timestamp: 2026-06-20 09:20:00 +0700
+Agent: Claude
+Task: Futures M2 (Binance USDT-M testnet) — full SDD execution + handoff docs
+Files Modified: HANDOFF.md (new), user_todo.md (new), CLAUDE.md, AGENTS.md, changes.log; (M2 code across exchange/binance_futures.py, exchange/base.py, exchange/futures_math.py, exchange/paper_futures.py, risk/manager.py, core/engine.py, core/loop_config.py, core/strategy_runtime.py, main.py, analysis/select_strategy_futures.py + tests; docs/superpowers plan+spec)
+Summary of Changes: Executed the M2 plan via subagent-driven development (Codex implementer, Claude/Opus staff review on every live-order path), 13 tasks. Added BinanceFuturesExchange (closePosition STOP+TP on MARK, reduceOnly exits, exchange-truth liquidationPrice, funding rate, add-margin liq guard, per-symbol leverage race guard), funding skip gate in RiskManager, post-open liq-buffer enforcement + funding threading in engine, per-(market,network) live wiring in main, §9 supertrend short re-validation, and an opt-in futures-testnet contract test. Spot path unchanged.
+Engineering Notes: Staff review caught 3 bugs the green per-task suites hid — (1) place_order returned off-contract "REJECTED" vs engine's != "FAILED" guard (phantom position) -> fixed to "FAILED"; (2) never-naked path masked the original error + no log -> hardened; (3) CRITICAL final-review C1: live get_positions returns strategy_id="" so the engine matched by (symbol,strategy_id) and never found its own futures position -> auto-flip + double-entry + max-hold failure on live; fixed by symbol-based futures matching (commit 7c0a241). DATA: supertrend short side executes but is unprofitable both sides on last 60d -> do NOT deploy live. Caveat: LIQ_BUFFER_PCT defaults 0.0 -> post-open liq guard dormant until set.
+Validation: Full suite .venv/bin/python -m pytest -q -> 474 passed, 6 skipped, 1 warning. Contract test skipped offline (needs RUN_CONTRACT_TESTS=1 + testnet keys). Branch feat/futures-m2-testnet, 19 commits ahead of main, NOT pushed/merged. Final whole-branch review (Opus): READY-TO-MERGE.
+Notes for Next Agent: See HANDOFF.md (machine-portable) + user_todo.md (pre-go-live checklist). M2 is testnet-only; real money (mainnet) needs M3 (not built — write a new plan first). To move to another machine: push the branch first (it is local-only). Pre-existing untracked package.json/package-lock.json not modified.
+---
