@@ -98,6 +98,7 @@ def _futures_engine_kwargs(cfg) -> dict:
         "max_hold_hours": cfg.max_hold_hours,
         "reentry_cooldown_bars": cfg.reentry_cooldown_bars,
         "funding_skip_threshold": cfg.funding_skip_threshold,
+        "partial_tp_pct": getattr(cfg, "partial_tp_pct", 0.0),
         "liq_buffer_pct": float(os.getenv("LIQ_BUFFER_PCT", "0.0")),
         "slippage_pad": float(os.getenv("LIQ_SLIPPAGE_PAD", "0.0")),
     }

@@ -30,6 +30,7 @@ class StrategyRuntimeConfig:
     max_hold_hours: float | None = None
     reentry_cooldown_bars: int = 0
     funding_skip_threshold: float = 0.001
+    partial_tp_pct: float = 0.0
 
 
 class RuntimeStrategyAdapter:

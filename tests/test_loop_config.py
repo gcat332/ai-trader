@@ -137,3 +137,33 @@ def test_spot_loops_not_checked():
         "LOOP2_MARKET": "spot",
     }
     validate_loop_leverage_consistency(parse_runtime_configs(env))
+
+
+def test_partial_tp_pct_defaults_when_unset():
+    env = {
+        "LOOP1_STRATEGY": "supertrend", "LOOP1_MODE": "PAPER",
+        "LOOP1_MARKET": "futures", "LOOP1_LEVERAGE": "5",
+    }
+    cfg = next(c for c in parse_runtime_configs(env) if c.loop_id != "legacy")
+    assert getattr(cfg, "partial_tp_pct", None) == 0.0
+
+
+def test_partial_tp_pct_parsed_from_loop_env():
+    env = {
+        "LOOP1_STRATEGY": "supertrend", "LOOP1_MODE": "PAPER",
+        "LOOP1_MARKET": "futures", "LOOP1_LEVERAGE": "5",
+        "LOOP1_PARTIAL_TP_PCT": "0.5",
+    }
+    cfg = next(c for c in parse_runtime_configs(env) if c.loop_id != "legacy")
+    assert getattr(cfg, "partial_tp_pct", None) == 0.5
+
+
+def test_partial_tp_pct_rejects_above_one():
+    import pytest
+    env = {
+        "LOOP1_STRATEGY": "supertrend", "LOOP1_MODE": "PAPER",
+        "LOOP1_MARKET": "futures", "LOOP1_LEVERAGE": "5",
+        "LOOP1_PARTIAL_TP_PCT": "1.5",
+    }
+    with pytest.raises(ValueError, match="PARTIAL_TP_PCT"):
+        parse_runtime_configs(env)
