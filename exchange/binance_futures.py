@@ -214,6 +214,18 @@ class BinanceFuturesExchange(Exchange):
     async def partial_take_profit(self, symbol, side, quantity, current_price=0.0) -> Order:
         exit_side = "sell" if side.upper() == "LONG" else "buy"
         amount = self._round_amount(symbol, quantity)
+        if amount <= 0:
+            return Order(
+                id=f"ptp-{symbol}",
+                symbol=symbol,
+                side=exit_side.upper(),
+                type="MARKET",
+                quantity=0,
+                price=None,
+                status="FAILED",
+                exchange_order_id=None,
+                reduce_only=True,
+            )
         result = await self._exchange.create_order(
             symbol=symbol,
             type="market",

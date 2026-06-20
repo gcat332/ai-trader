@@ -115,7 +115,7 @@ def test_two_futures_loops_same_symbol_diff_leverage_rejected():
         "LOOP2_STRATEGY": "rsi_macd", "LOOP2_SYMBOL": "BTC/USDT",
         "LOOP2_MARKET": "futures", "LOOP2_LEVERAGE": "5",
     }
-    with pytest.raises(ValueError, match="leverage"):
+    with pytest.raises(ValueError, match=r"BTC/USDT.*leverage|leverage.*BTC/USDT"):
         validate_loop_leverage_consistency(parse_runtime_configs(env))
 
 
@@ -164,6 +164,17 @@ def test_partial_tp_pct_rejects_above_one():
         "LOOP1_STRATEGY": "supertrend", "LOOP1_MODE": "PAPER",
         "LOOP1_MARKET": "futures", "LOOP1_LEVERAGE": "5",
         "LOOP1_PARTIAL_TP_PCT": "1.5",
+    }
+    with pytest.raises(ValueError, match="PARTIAL_TP_PCT"):
+        parse_runtime_configs(env)
+
+
+def test_partial_tp_pct_rejects_negative_value():
+    import pytest
+    env = {
+        "LOOP1_STRATEGY": "supertrend", "LOOP1_MODE": "PAPER",
+        "LOOP1_MARKET": "futures", "LOOP1_LEVERAGE": "5",
+        "LOOP1_PARTIAL_TP_PCT": "-0.1",
     }
     with pytest.raises(ValueError, match="PARTIAL_TP_PCT"):
         parse_runtime_configs(env)

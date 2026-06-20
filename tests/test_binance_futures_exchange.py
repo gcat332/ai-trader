@@ -108,6 +108,19 @@ async def test_partial_take_profit_short_exit_side_is_buy(fx_orders):
 
 
 @pytest.mark.asyncio
+async def test_partial_take_profit_skips_quantity_that_rounds_to_zero(fx_orders):
+    order = await fx_orders.partial_take_profit(
+        "BTC/USDT", side="LONG", quantity=0.0001, current_price=66000.0
+    )
+
+    assert order.status == "FAILED"
+    assert order.quantity == 0
+    assert order.side == "SELL"
+    assert order.reduce_only is True
+    fx_orders._exchange.create_order.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_move_stop_to_breakeven_places_new_stop_before_cancel(fx_protect):
     calls = []
 

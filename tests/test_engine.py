@@ -708,6 +708,46 @@ async def test_partial_tp_triggers_once_at_tp1_then_breakeven():
 
 
 @pytest.mark.asyncio
+async def test_partial_tp_marks_done_when_breakeven_move_fails(caplog):
+    exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
+    exchange.fetch_funding_rate = AsyncMock(return_value=0.0)
+    exchange.partial_take_profit = AsyncMock(wraps=exchange.partial_take_profit)
+    exchange.move_stop_to_breakeven = AsyncMock(side_effect=Exception("stop move failed"))
+    engine = Engine(
+        exchange=exchange,
+        strategy=AlwaysBuyStrategy(strategy_id="futures_partial_tp_be_fail"),
+        symbol="BTC/USDT",
+        timeframe="1h",
+        risk_manager=RiskManager(),
+        market="futures",
+        leverage=2,
+        partial_tp_pct=0.5,
+    )
+
+    await engine.process_candles([
+        [1700000000000, 65000.0, 65500.0, 64500.0, 65000.0, 100.0],
+    ])
+    engine.strategy = AlwaysHoldStrategy(strategy_id="futures_partial_tp_be_fail")
+
+    with caplog.at_level("WARNING", logger="core.engine"):
+        await engine.process_candles([
+            [1700003600000, 65000.0, 67100.0, 64500.0, 66800.0, 100.0],
+        ])
+
+    assert "BTC/USDT" in engine._partial_done
+    exchange.partial_take_profit.assert_awaited_once()
+    exchange.move_stop_to_breakeven.assert_awaited_once()
+    assert "breakeven stop move failed on BTC/USDT: stop move failed" in caplog.text
+
+    await engine.process_candles([
+        [1700007200000, 66800.0, 67200.0, 66000.0, 67100.0, 100.0],
+    ])
+
+    exchange.partial_take_profit.assert_awaited_once()
+    exchange.move_stop_to_breakeven.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_partial_tp_off_by_default():
     exchange = CapturingPaperFuturesExchange({"USDT": 10000.0}, leverage=2, slippage_bps=0.0)
     exchange.fetch_funding_rate = AsyncMock(return_value=0.0)

@@ -1,7 +1,7 @@
 import logging
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from core.models import Order
+from core.models import Order, Position
 from exchange.dry_run import DryRunExchange
 from exchange.futures_math import MMR_DEFAULT
 
@@ -19,6 +19,7 @@ def wrapped():
     w.place_order = AsyncMock()
     w.protect_position = AsyncMock()
     w.cancel_order = AsyncMock()
+    w.add_margin = AsyncMock()
     w.partial_take_profit = AsyncMock()
     w.move_stop_to_breakeven = AsyncMock()
     return w
@@ -108,3 +109,37 @@ async def test_maintenance_margin_rate_falls_back_when_wrapped_has_no_method(wra
     dr = DryRunExchange(wrapped)
 
     assert await dr.maintenance_margin_rate("BTC/USDT") == MMR_DEFAULT
+
+
+@pytest.mark.asyncio
+async def test_enforce_liquidation_buffer_reads_but_does_not_mutate_wrapped(wrapped, caplog):
+    wrapped.get_positions = AsyncMock(return_value=[
+        Position(
+            symbol="BTC/USDT",
+            side="LONG",
+            entry_price=65000.0,
+            quantity=0.01,
+            unrealized_pnl=0.0,
+            take_profit=None,
+            stop_loss=None,
+            mode="FUTURES",
+            leverage=2,
+            liquidation_price=64900.0,
+        )
+    ])
+    dr = DryRunExchange(wrapped)
+
+    with caplog.at_level(logging.WARNING):
+        action = await dr.enforce_liquidation_buffer(
+            "BTC/USDT",
+            current_price=65000.0,
+            buffer_pct=0.01,
+            stop_loss=64000.0,
+        )
+
+    assert action == "would_act"
+    wrapped.get_positions.assert_awaited_once()
+    wrapped.add_margin.assert_not_awaited()
+    wrapped.place_order.assert_not_awaited()
+    wrapped.cancel_order.assert_not_awaited()
+    assert "WOULD add margin / close BTC/USDT" in caplog.text
