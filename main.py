@@ -24,6 +24,7 @@ from core.drift_monitor import DriftDetector
 from core.engine import Engine
 from core.live_controller import LiveEngineController
 from core.loop_config import parse_loops, parse_runtime_configs
+from core.loop_config import validate_loop_leverage_consistency
 from core.supervisor import run_supervised
 from core.strategy_factory import build_runtime_strategy, build_strategy
 from core.strategy_manager import StrategyManager
@@ -172,6 +173,7 @@ async def run():
 
     loops = parse_loops(os.environ)
     runtime_configs = parse_runtime_configs(os.environ)
+    validate_loop_leverage_consistency(runtime_configs)
     _warn_on_mixed_runtime_modes(runtime_configs, logger)
     live_runtime_configured = any(
         cfg.mode == "LIVE" and _runtime_is_scheduled(cfg)

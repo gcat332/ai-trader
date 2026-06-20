@@ -188,3 +188,19 @@ def parse_runtime_configs(env: dict) -> list[StrategyRuntimeConfig]:
             funding_skip_threshold=funding_skip_threshold,
         ))
     return configs
+
+
+def validate_loop_leverage_consistency(configs: list[StrategyRuntimeConfig]) -> None:
+    seen: dict[str, int] = {}
+    for cfg in configs:
+        if str(getattr(cfg, "market", "spot")).lower() != "futures":
+            continue
+        symbol = cfg.symbol
+        leverage = cfg.leverage
+        existing = seen.get(symbol)
+        if existing is not None and existing != leverage:
+            raise ValueError(
+                f"Conflicting futures leverage for {symbol}: "
+                f"previous={existing}, current={leverage}"
+            )
+        seen[symbol] = leverage

@@ -2,6 +2,7 @@
 strategies run concurrently, each configured from its own .env section."""
 from core.loop_config import parse_loops
 from core.loop_config import parse_runtime_configs
+from core.loop_config import validate_loop_leverage_consistency
 
 
 def test_no_loops_when_env_empty():
@@ -104,3 +105,35 @@ def test_leverage_above_one_requires_futures():
            "LOOP1_MARKET": "spot", "LOOP1_LEVERAGE": "3"}
     with pytest.raises(ValueError, match="leverage"):
         parse_runtime_configs(env)
+
+
+def test_two_futures_loops_same_symbol_diff_leverage_rejected():
+    import pytest
+    env = {
+        "LOOP1_STRATEGY": "ema_cross", "LOOP1_SYMBOL": "BTC/USDT",
+        "LOOP1_MARKET": "futures", "LOOP1_LEVERAGE": "3",
+        "LOOP2_STRATEGY": "rsi_macd", "LOOP2_SYMBOL": "BTC/USDT",
+        "LOOP2_MARKET": "futures", "LOOP2_LEVERAGE": "5",
+    }
+    with pytest.raises(ValueError, match="leverage"):
+        validate_loop_leverage_consistency(parse_runtime_configs(env))
+
+
+def test_same_symbol_same_leverage_ok():
+    env = {
+        "LOOP1_STRATEGY": "ema_cross", "LOOP1_SYMBOL": "BTC/USDT",
+        "LOOP1_MARKET": "futures", "LOOP1_LEVERAGE": "3",
+        "LOOP2_STRATEGY": "rsi_macd", "LOOP2_SYMBOL": "BTC/USDT",
+        "LOOP2_MARKET": "futures", "LOOP2_LEVERAGE": "3",
+    }
+    validate_loop_leverage_consistency(parse_runtime_configs(env))
+
+
+def test_spot_loops_not_checked():
+    env = {
+        "LOOP1_STRATEGY": "ema_cross", "LOOP1_SYMBOL": "BTC/USDT",
+        "LOOP1_MARKET": "spot",
+        "LOOP2_STRATEGY": "rsi_macd", "LOOP2_SYMBOL": "BTC/USDT",
+        "LOOP2_MARKET": "spot",
+    }
+    validate_loop_leverage_consistency(parse_runtime_configs(env))
