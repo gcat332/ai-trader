@@ -256,6 +256,9 @@ async def run():
                 if paper_mode
                 else _build_live_exchange_for(spec.config, settings, exchange)
             )
+            if _env_bool('DRY_RUN', False) and not paper_mode:
+                from exchange.dry_run import DryRunExchange
+                spec.exchange = DryRunExchange(spec.exchange)
         await _verify_futures_accounts(loop_specs, paper_mode)
 
         allocation_manager = AllocationManager({
