@@ -482,3 +482,26 @@ Notes for Next Agent: tests/test_live_controller.py was also updated because the
 full suite still asserted the old bool close_position contract there. Existing
 untracked package.json and package-lock.json were not modified or staged.
 ---
+---
+Timestamp: 2026-06-21 14:59:37 +0700
+Agent: Codex
+Task: Fix Task 4 safety-critical close routing and Telegram /close handling
+Files Modified: core/live_controller.py, notifier/telegram.py,
+tests/test_close_identity.py, tests/test_telegram.py, .superpowers/sdd/task-4-report.md,
+changes.log
+Summary of Changes: Routed close_position(), flatten(), and move_to_breakeven()
+through every owning engine via _all_engines(), and changed _close_one() to place
+orders and read residual positions through the passed exchange. Tightened symbol
+matching to exact or slash-qualified matches. Updated Telegram /close to branch
+on dict status so not_found is not reported as closed. Added regressions for
+multi-engine flatten ownership, partial residual read-back, unsupported
+breakeven, and /close not_found replies.
+Validation: Red focused run
+.venv/bin/python -m pytest tests/test_close_identity.py tests/test_telegram.py
+tests/test_live_controller.py -q -> 3 failed, 38 passed. Green focused run of
+the same command -> 41 passed in 0.11s. Full suite .venv/bin/python -m pytest -q
+-> 546 passed, 6 skipped, 1 warning in 4.77s.
+Notes for Next Agent: Pre-existing untracked package.json and package-lock.json
+were not modified or staged. The requested task-4 report note was appended on
+disk; .superpowers remains ignored by Git in this working tree.
+---

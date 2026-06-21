@@ -663,11 +663,14 @@ class TelegramNotifier:
             await update.message.reply_text("Usage: /close <symbol>  e.g. /close BTC")
             return
         symbol = context.args[0].upper()
-        closed = await self._controller.close_position(symbol)
-        if closed:
-            await update.message.reply_text(f"✅ {symbol} position closed.")
+        result = await self._controller.close_position(symbol)
+        status = result.get('status')
+        if status in ('closed', 'partial'):
+            await update.message.reply_text(f'✅ {symbol} {status}.')
+        elif status == 'not_found':
+            await update.message.reply_text(f'⚠️ No open position for {symbol}.')
         else:
-            await update.message.reply_text(f"⚠️ No open position for {symbol}.")
+            await update.message.reply_text(f'{symbol}: {status}')
 
     async def start(self) -> None:
         """Build and start the Telegram Application. Call once at bot startup."""
