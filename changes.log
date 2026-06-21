@@ -529,3 +529,21 @@ tests/test_trading_loop.py is absent in this checkout; tests/test_trading_loop_f
 was run as the adjacent trading-loop check. Pre-existing untracked package.json
 and package-lock.json were not modified or staged.
 ---
+---
+Timestamp: 2026-06-21 15:21:34 +0700
+Agent: Codex
+Task: Fix Task 6 Telegram confirmation conformance
+Files Modified: notifier/telegram.py, tests/test_telegram_confirm.py,
+.superpowers/sdd/task-6-report.md, changes.log
+Summary of Changes: Replaced confirmation state/method behavior with the
+requested spec code: typed pending store, monotonic expiry, label preservation,
+atomic pop(nonce, None), cancel nonce consumption, effective_chat authorization,
+and close/be/stop_bot/flatten action names. Replaced the confirmation tests
+with the Task 6 brief Step 1 block, removing the incorrect cancel replay test.
+Validation: .venv/bin/python -m pytest tests/test_telegram_confirm.py -q ->
+4 passed. Full suite .venv/bin/python -m pytest -q -> 555 passed, 6 skipped,
+1 warning.
+Notes for Next Agent: .superpowers is ignored in this worktree, so the Task 6
+report note was updated on disk but may not be included in the normal commit.
+Pre-existing untracked package.json and package-lock.json were not modified.
+---

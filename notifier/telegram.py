@@ -387,7 +387,7 @@ class TelegramNotifier:
         self._health_task = None
         self._health_monitor = None
         self._liq_soft_warned: set[str] = set()
-        self._pending: dict = {}
+        self._pending: dict[str, dict] = {}
         self._confirm_ttl = float(os.getenv('TELEGRAM_CONFIRM_TTL_SECONDS', '120'))
 
     def _authorized(self, update) -> bool:
@@ -403,95 +403,66 @@ class TelegramNotifier:
         await update.message.reply_text("Unauthorized chat.")
         return True
 
-    def _make_confirm(self, action: str, params: dict) -> tuple[str, "InlineKeyboardMarkup"]:
+    def _make_confirm(self, action: str, args: dict, label: str):
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
-        nonce = secrets.token_hex(8)
+        nonce = secrets.token_hex(4)
         self._pending[nonce] = {
-            "action": action,
-            "params": params,
-            "ts": time.monotonic(),
+            'action': action, 'args': args, 'label': label,
+            'expires': time.monotonic() + self._confirm_ttl,
         }
-        prompt_text = f"Confirm {action}?"
+        text = f'{label}\nConfirm?'
         markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Yes", callback_data=f"confirm:{nonce}"),
-            InlineKeyboardButton("No", callback_data="cancel"),
+            InlineKeyboardButton('✅ Yes', callback_data=f'confirm:{nonce}'),
+            InlineKeyboardButton('✖ No', callback_data=f'cancel:{nonce}'),
         ]])
-        return prompt_text, markup
+        return text, markup
 
-    def _authorized_callback(self, query) -> bool:
-        user = getattr(query, "from_user", None)
-        user_id = getattr(user, "id", None)
-        if user_id is None or not isinstance(user_id, (int, str)):
+    def _authorized_callback(self, update) -> bool:
+        chat = getattr(update, 'effective_chat', None)
+        chat_id = getattr(chat, 'id', None)
+        if chat_id is None:
             return True
-        return str(user_id) == str(self._chat_id)
+        return str(chat_id) == str(self._chat_id)
 
     async def _on_confirm(self, update, context) -> None:
         query = update.callback_query
-        if not self._authorized_callback(query):
-            await query.answer()
-            await query.edit_message_text("Unauthorized chat.")
-            return
-
-        data = getattr(query, "data", "")
-        if data == "cancel":
-            await query.answer()
-            await query.edit_message_text("Cancelled.")
-            return
-
-        prefix, _, nonce = data.partition(":")
-        if prefix != "confirm" or not nonce:
-            await query.answer()
-            await query.edit_message_text("Unknown confirmation action.")
-            return
-
-        pending = self._pending.get(nonce)
-        if pending is None:
-            await query.answer()
-            await query.edit_message_text("Expired — re-issue the command.")
-            return
-
-        if time.monotonic() - pending["ts"] > self._confirm_ttl:
-            self._pending.pop(nonce, None)
-            await query.answer()
-            await query.edit_message_text("Expired — re-issue the command.")
-            return
-
-        pending = self._pending.pop(nonce)
-        result = await self._execute_action(pending["action"], pending["params"])
         await query.answer()
+        if not self._authorized_callback(update):
+            await query.edit_message_text('Unauthorized chat.')
+            return
+        kind, _, nonce = query.data.partition(':')
+        pending = self._pending.pop(nonce, None)
+        if pending is None or pending['expires'] < time.monotonic():
+            await query.edit_message_text(
+                'This action is old — /open_positions to act on current positions.'
+            )
+            return
+        if kind == 'cancel':
+            await query.edit_message_text('Cancelled.')
+            return
+        result = await self._execute_action(pending['action'], pending['args'])
         await query.edit_message_text(result)
 
-    async def _execute_action(self, action: str, params: dict) -> str:
-        if action == "close_position":
-            result = await self._controller.close_position(
-                params["symbol"], side=params["side"], loop_id=params["loop_id"]
-            )
-            return (
-                f"{result.get('symbol', params['symbol'])} "
-                f"{result.get('side', params['side'])}: {result.get('status')}"
-            )
-        if action == "move_to_breakeven":
-            result = await self._controller.move_to_breakeven(
-                params["symbol"], side=params["side"], loop_id=params["loop_id"]
-            )
-            return (
-                f"{result.get('symbol', params['symbol'])} "
-                f"{result.get('side', params['side'])}: {result.get('status')}"
-            )
-        if action == "stop_bot":
+    async def _execute_action(self, action: str, args: dict) -> str:
+        if action == 'close':
+            res = await self._controller.close_position(
+                args['symbol'], side=args.get('side'), loop_id=args.get('loop_id'))
+            return f"{res['symbol']} {res.get('side') or ''}: {res['status']}"
+        if action == 'be':
+            res = await self._controller.move_to_breakeven(
+                args['symbol'], side=args.get('side'), loop_id=args.get('loop_id'))
+            return f"{res['symbol']} {res.get('side') or ''}: SL→BE {res['status']}"
+        if action == 'stop_bot':
             await self._controller.stop_bot()
-            return "Bot stopped. Open exchange-side protection is unchanged."
-        if action == "flatten":
+            return 'Bot stopped. Open exchange-side protection is unchanged.'
+        if action == 'flatten':
             results = await self._controller.flatten()
             if not results:
-                return "Nothing to flatten — no open positions."
-            lines = [
-                f"{result.get('symbol')} {result.get('side')}: {result.get('status')}"
-                for result in results
-            ]
-            return "Flatten complete:\n" + "\n".join(lines)
-        return f"Unknown action: {action}"
+                return 'Nothing to flatten — no open positions.'
+            lines = [f"  • {r['symbol']} {r.get('side') or ''}: {r['status']}"
+                     for r in results]
+            return 'Flatten complete:\n' + '\n'.join(lines)
+        return f'Unknown action: {action}'
 
     async def send(self, text: str) -> None:
         if self._app is None:
