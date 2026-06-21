@@ -11,6 +11,43 @@ from notifier.engine_controller import EngineController
 logger = logging.getLogger("notifier.telegram")
 THAI_TZ = ZoneInfo("Asia/Bangkok")
 
+# Leverage-tiered liquidation bands as price-distance |mark-liq|/mark.
+# (soft = warn once, hard = repeat every poll). Override via env if needed.
+_LIQ_BANDS = [
+    (5, 0.08, 0.04),
+    (10, 0.04, 0.02),
+    (20, 0.02, 0.01),
+]
+_LIQ_BANDS_DEFAULT = (0.01, 0.005)  # > 20x
+
+
+def _liq_bands_for(leverage: int) -> tuple[float, float]:
+    for cap, soft, hard in _LIQ_BANDS:
+        if leverage <= cap:
+            return soft, hard
+    return _LIQ_BANDS_DEFAULT
+
+
+def liq_warning_tier(mark: float, liq: float, leverage: int) -> str:
+    if not liq or not mark:
+        return "none"
+    distance = abs(mark - liq) / mark
+    soft, hard = _liq_bands_for(leverage)
+    if distance <= hard:
+        return "hard"
+    if distance <= soft:
+        return "soft"
+    return "none"
+
+
+def format_liq_warning(p: dict, mark: float, distance_pct: float) -> str:
+    return (
+        f"⚠️ NEAR LIQUIDATION · {p['symbol']} {p.get('side')} {p.get('leverage')}x\n"
+        f"Mark: {mark:,.0f}  |  Liq: {p['liquidation_price']:,.0f}\n"
+        f"Distance: {distance_pct:.2%}\n"
+        f"uPnL: ${p.get('unrealized_pnl', 0.0):.2f}"
+    )
+
 
 def _as_thai_time(value: datetime | None = None) -> datetime:
     value = value or datetime.now(timezone.utc)
@@ -347,6 +384,7 @@ class TelegramNotifier:
         self._app = None  # initialized in start()
         self._health_task = None
         self._health_monitor = None
+        self._liq_soft_warned: set[str] = set()
 
     def _authorized(self, update) -> bool:
         chat = getattr(update, "effective_chat", None)
@@ -366,6 +404,29 @@ class TelegramNotifier:
             logger.warning("TelegramNotifier.send() called but bot not started — message dropped")
             return
         await self._app.bot.send_message(chat_id=self._chat_id, text=text)
+
+    async def maybe_warn_liquidation(self, positions: list[dict], mark: float) -> None:
+        """Fire a near-liquidation alert per the leverage-tiered two-tier model.
+        Soft tier warns once until the position exits the band (re-arm); hard
+        tier repeats every poll. Futures-only; spot/None-liq skipped."""
+        for p in positions:
+            if p.get("mode") != "FUTURES":
+                continue
+            liq = p.get("liquidation_price")
+            if not liq:
+                continue
+            key = f"{p['symbol']}:{p.get('side')}"
+            tier = liq_warning_tier(mark, liq, p.get("leverage", 1) or 1)
+            if tier == "none":
+                self._liq_soft_warned.discard(key)
+                continue
+            if tier == "soft":
+                if key in self._liq_soft_warned:
+                    continue
+                self._liq_soft_warned.add(key)
+            # hard: never dedup (fall through and warn every poll)
+            distance_pct = abs(mark - liq) / mark
+            await self.send(format_liq_warning(p, mark, distance_pct))
 
     async def on_signal(self, signal: Signal) -> None:
         if signal.side != "HOLD":

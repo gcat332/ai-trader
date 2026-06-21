@@ -505,3 +505,27 @@ Notes for Next Agent: Pre-existing untracked package.json and package-lock.json
 were not modified or staged. The requested task-4 report note was appended on
 disk; .superpowers remains ignored by Git in this working tree.
 ---
+---
+Timestamp: 2026-06-21 15:06:51 +0700
+Agent: Codex
+Task: Implement Task 5 SAFETY leverage-aware two-tier liquidation warning
+Files Modified: notifier/telegram.py, core/trading_loop.py,
+tests/test_liq_warning.py, changes.log
+Summary of Changes: Added leverage-tiered liquidation warning bands and the
+Telegram proactive warning path with soft-tier once-per-band de-dup/re-arm and
+hard-tier every-poll alerts. Wired the trading loop to call the notifier after
+the live outcome snapshot using LiveEngineController._position_dict so it sees
+the same widened futures position fields as Telegram commands. Spot positions
+and futures positions with no liquidation price are skipped.
+Validation: Red phase .venv/bin/python -m pytest tests/test_liq_warning.py -v
+-> expected ImportError for missing liq_warning_tier. Green focused
+.venv/bin/python -m pytest tests/test_liq_warning.py -v -> 5 passed. Adjacent
+focused .venv/bin/python -m pytest tests/test_liq_warning.py
+tests/test_trading_loop_futures.py -v -> 10 passed, 1 warning. Full suite
+.venv/bin/python -m pytest -> 551 passed, 6 skipped, 1 warning.
+Notes for Next Agent: core/live_controller.py does not import core/trading_loop.py,
+so the requested top-level LiveEngineController import is one-directional.
+tests/test_trading_loop.py is absent in this checkout; tests/test_trading_loop_futures.py
+was run as the adjacent trading-loop check. Pre-existing untracked package.json
+and package-lock.json were not modified or staged.
+---
