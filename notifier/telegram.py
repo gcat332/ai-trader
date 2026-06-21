@@ -120,6 +120,16 @@ def _format_position_line(p: dict) -> str:
     return f"  • {sym} qty={qty} unrealized=${upnl:.2f}"
 
 
+def _position_buttons(p: dict):
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    loop = p.get("loop_id") or ""
+    ident = f"{loop}:{p['symbol']}:{p.get('side') or ''}"
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("Close", callback_data=f"close:{ident}"),
+        InlineKeyboardButton("SL→BE", callback_data=f"be:{ident}"),
+    ]])
+
+
 def format_daily_summary(
     total_evaluated: int,
     placed: int,
@@ -424,6 +434,33 @@ class TelegramNotifier:
             return True
         return str(chat_id) == str(self._chat_id)
 
+    @staticmethod
+    def _parse_ident(rest: str) -> dict:
+        # rest = "<loop>:<symbol>:<side>"; symbol may contain no ":"
+        loop, symbol, side = (rest.split(":", 2) + ["", "", ""])[:3]
+        return {"loop_id": loop or None, "symbol": symbol, "side": side or None}
+
+    async def _on_action(self, update, context) -> None:
+        query = update.callback_query
+        await query.answer()
+        if not self._authorized_callback(update):
+            await query.edit_message_text("Unauthorized chat.")
+            return
+        kind, _, rest = query.data.partition(":")
+        args = self._parse_ident(rest)
+        if kind == "close":
+            label = f"Close {args['symbol']} {args['side'] or ''}".strip()
+            text, markup = self._make_confirm("close", args, label)
+            await query.message.reply_text(text, reply_markup=markup)
+            return
+        if kind == "be":
+            # Default-off with partial TP until a strategy is validated.
+            if os.getenv("TELEGRAM_ENABLE_BE_BUTTON", "false").lower() not in ("1", "true", "yes"):
+                await query.message.reply_text("SL→BE is disabled (set TELEGRAM_ENABLE_BE_BUTTON=true).")
+                return
+            result = await self._execute_action("be", args)
+            await query.message.reply_text(result)
+
     async def _on_confirm(self, update, context) -> None:
         query = update.callback_query
         await query.answer()
@@ -464,11 +501,11 @@ class TelegramNotifier:
             return 'Flatten complete:\n' + '\n'.join(lines)
         return f'Unknown action: {action}'
 
-    async def send(self, text: str) -> None:
+    async def send(self, text: str, **kwargs) -> None:
         if self._app is None:
             logger.warning("TelegramNotifier.send() called but bot not started — message dropped")
             return
-        await self._app.bot.send_message(chat_id=self._chat_id, text=text)
+        await self._app.bot.send_message(chat_id=self._chat_id, text=text, **kwargs)
 
     async def maybe_warn_liquidation(self, positions: list[dict], mark: float) -> None:
         """Fire a near-liquidation alert per the leverage-tiered two-tier model.
@@ -491,7 +528,7 @@ class TelegramNotifier:
                 self._liq_soft_warned.add(key)
             # hard: never dedup (fall through and warn every poll)
             distance_pct = abs(mark - liq) / mark
-            await self.send(format_liq_warning(p, mark, distance_pct))
+            await self.send(format_liq_warning(p, mark, distance_pct), reply_markup=_position_buttons(p))
 
     async def on_signal(self, signal: Signal) -> None:
         if signal.side != "HOLD":
@@ -737,13 +774,18 @@ class TelegramNotifier:
         if not positions:
             await update.message.reply_text("Open positions: none")
             return
-        lines = []
-        for p in positions:
-            if p.get('mode') == 'FUTURES':
-                lines.append(_format_position_line(p).lstrip('• ').strip())
-            else:
-                lines.append(f"{p['symbol']} qty={p['quantity']} unrealized={p['unrealized_pnl']:.2f}")
-        await update.message.reply_text('\n'.join(lines))
+        futures = [p for p in positions if p.get("mode") == "FUTURES"]
+        spot = [p for p in positions if p.get("mode") != "FUTURES"]
+        if spot:
+            await update.message.reply_text("\n".join(
+                f"{p['symbol']} qty={p['quantity']} unrealized={p['unrealized_pnl']:.2f}"
+                for p in spot
+            ))
+        for p in futures:
+            await update.message.reply_text(
+                _format_position_line(p).lstrip("• ").strip(),
+                reply_markup=_position_buttons(p),
+            )
 
     async def cmd_closed_positions(self, update, context) -> None:
         if await self._reject_if_unauthorized(update):
@@ -800,7 +842,7 @@ class TelegramNotifier:
 
     async def start(self) -> None:
         """Build and start the Telegram Application. Call once at bot startup."""
-        from telegram.ext import Application, CommandHandler
+        from telegram.ext import Application, CallbackQueryHandler, CommandHandler
         self._app = Application.builder().token(self._token).build()
         self._app.add_handler(CommandHandler("start", self.cmd_help))
         self._app.add_handler(CommandHandler("help", self.cmd_help))
@@ -823,6 +865,8 @@ class TelegramNotifier:
         self._app.add_handler(CommandHandler("risk_status", self.cmd_risk_status))
         self._app.add_handler(CommandHandler("health", self.cmd_health))
         self._app.add_handler(CommandHandler("close", self.cmd_close))
+        self._app.add_handler(CallbackQueryHandler(self._on_confirm, pattern=r"^(confirm|cancel):"))
+        self._app.add_handler(CallbackQueryHandler(self._on_action, pattern=r"^(close|be):"))
         await self._app.initialize()
         await self._app.updater.start_polling()
         await self._app.start()
