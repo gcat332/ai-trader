@@ -3,9 +3,7 @@ from notifier.telegram import format_strategy_list, _format_position_line
 
 def test_position_line_spot_unchanged():
     p = {"symbol": "BTC/USDT", "quantity": 0.1, "unrealized_pnl": 5.0, "mode": "SPOT"}
-    line = _format_position_line(p)
-    assert "BTC/USDT" in line and "0.1" in line and "5.0" in line
-    assert "liq" not in line.lower()
+    assert _format_position_line(p) == "  • BTC/USDT qty=0.1 unrealized=$5.00"
 
 
 def test_position_line_futures_shows_side_lev_liq_margin_first():

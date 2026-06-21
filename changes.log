@@ -442,3 +442,21 @@ Validation: Red focused run
 Notes for Next Agent: Spot/non-futures paths were not changed. Pre-existing
 untracked package.json and package-lock.json were not modified or staged.
 ---
+---
+Timestamp: 2026-06-21 14:41:01 +0700
+Agent: Codex
+Task: Preserve /open_positions spot unrealized format
+Files Modified: notifier/telegram.py, tests/test_telegram.py,
+tests/test_telegram_futures_positions.py, .superpowers/sdd/task-3-report.md,
+changes.log
+Summary of Changes: Updated cmd_open_positions so SPOT rows use the old
+no-dollar-sign unrealized format while FUTURES rows continue through the shared
+position helper. Strengthened the spot helper assertion to exact string equality
+and added a command-level regression test for spot /open_positions output.
+Validation: .venv/bin/python -m pytest tests/test_telegram_futures_positions.py
+tests/test_telegram.py tests/test_telegram_multiloop.py -q -> 36 passed in
+0.12s.
+Notes for Next Agent: The helper still intentionally includes a dollar sign for
+spot because format_strategy_list's previous output did; only cmd_open_positions
+has the legacy no-dollar spot format.
+---

@@ -113,6 +113,17 @@ async def test_handle_pnl_command(mock_controller):
 
 
 @pytest.mark.asyncio
+async def test_cmd_open_positions_preserves_spot_unrealized_without_dollar(mock_controller):
+    notifier = TelegramNotifier(token="fake", chat_id="123", controller=mock_controller)
+    update = MagicMock()
+    update.message.reply_text = AsyncMock()
+    await notifier.cmd_open_positions(update, None)
+    update.message.reply_text.assert_awaited_once_with(
+        "BTC/USDT qty=0.01 unrealized=50.00"
+    )
+
+
+@pytest.mark.asyncio
 async def test_handle_close_command(mock_controller):
     notifier = TelegramNotifier(token="fake", chat_id="123", controller=mock_controller)
     update = MagicMock()

@@ -611,9 +611,13 @@ class TelegramNotifier:
         if not positions:
             await update.message.reply_text("Open positions: none")
             return
-        await update.message.reply_text("\n".join(
-            _format_position_line(p).lstrip("• ").strip() for p in positions
-        ))
+        lines = []
+        for p in positions:
+            if p.get('mode') == 'FUTURES':
+                lines.append(_format_position_line(p).lstrip('• ').strip())
+            else:
+                lines.append(f"{p['symbol']} qty={p['quantity']} unrealized={p['unrealized_pnl']:.2f}")
+        await update.message.reply_text('\n'.join(lines))
 
     async def cmd_closed_positions(self, update, context) -> None:
         if await self._reject_if_unauthorized(update):
