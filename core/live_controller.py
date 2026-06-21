@@ -50,6 +50,23 @@ class LiveEngineController(EngineController):
         ids.update({cfg.strategy_instance_id, cfg.loop_id})
         return ids
 
+    @staticmethod
+    def _position_dict(p) -> dict:
+        leverage = getattr(p, "leverage", 1) or 1
+        entry = getattr(p, "entry_price", 0.0) or 0.0
+        qty = p.quantity
+        return {
+            "symbol": p.symbol,
+            "quantity": qty,
+            "unrealized_pnl": p.unrealized_pnl,
+            "side": getattr(p, "side", None),
+            "mode": getattr(p, "mode", "SPOT"),
+            "leverage": leverage,
+            "entry_price": entry,
+            "liquidation_price": getattr(p, "liquidation_price", None),
+            "initial_margin": (entry * qty) / leverage,
+        }
+
     async def pause(self) -> None:
         await self.stop_bot()
 
@@ -93,10 +110,7 @@ class LiveEngineController(EngineController):
             # with one active at a time (arbiter-managed). Expose the full set so the
             # status/reporting shows all of them, not just the active one.
             "techniques": getattr(self._engine.strategy, "strategy_ids", None),
-            "open_positions": [
-                {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
-                for p in positions
-            ],
+            "open_positions": [self._position_dict(p) for p in positions],
             "open_order_count": await self._open_order_count(),
         }
 
@@ -157,13 +171,14 @@ class LiveEngineController(EngineController):
                 "techniques": self._strategy_techniques(r.engine.strategy) or None,
                 "exit_on_opposite_signal": r.config.exit_on_opposite_signal,
                 "mode": r.config.mode,
+                "market": (getattr(r.config, "market", "spot") or "spot").upper(),
                 "running": r.engine.is_running,
                 "symbol": r.config.symbol,
                 "timeframe": r.config.timeframe,
                 "allocation_pct": r.config.allocation_pct,
                 "open_order_count": await self._open_order_count(self._runtime_strategy_ids(r)),
                 "open_positions": [
-                    {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
+                    self._position_dict(p)
                     for p in await r.engine.exchange.get_positions()
                     if getattr(p, "strategy_id", r.config.strategy_instance_id) in self._runtime_strategy_ids(r)
                 ],
@@ -192,13 +207,14 @@ class LiveEngineController(EngineController):
                 "strategy_ids": sorted(strategy_ids),
                 "exit_on_opposite_signal": cfg.exit_on_opposite_signal,
                 "mode": cfg.mode,
+                "market": (getattr(cfg, "market", "spot") or "spot").upper(),
                 "running": runtime.engine.is_running,
                 "symbol": cfg.symbol,
                 "timeframe": cfg.timeframe,
                 "allocation_pct": cfg.allocation_pct,
                 "open_order_count": await self._open_order_count(strategy_ids),
                 "open_positions": [
-                    {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
+                    self._position_dict(p)
                     for p in positions
                     if getattr(p, "strategy_id", cfg.strategy_instance_id) in strategy_ids
                 ],
@@ -215,22 +231,92 @@ class LiveEngineController(EngineController):
             return {"available": False}
         status = self._risk_manager.status()
         status["available"] = True
+        if "current_drawdown_pct" not in status and hasattr(self._risk_manager, "current_drawdown_pct"):
+            status["current_drawdown_pct"] = self._risk_manager.current_drawdown_pct()
         return status
 
-    async def close_position(self, symbol: str) -> bool:
-        positions = await self._engine.exchange.get_positions()
-        pos = next((p for p in positions if p.symbol == symbol or p.symbol.startswith(symbol)), None)
-        if pos is None:
-            return False
+    def _all_engines(self):
+        engines = list(self._engines)
+        if self._manager is not None:
+            for r in self._manager.runtimes():
+                if r.engine not in engines:
+                    engines.append(r.engine)
+        return engines
+
+    @staticmethod
+    def _closing_side(position_side: str) -> str:
+        return 'SELL' if position_side == 'LONG' else 'BUY'
+
+    def _match(self, positions, symbol, side, loop_id):
+        def ok(p):
+            if not (p.symbol == symbol or p.symbol.startswith(f'{symbol}/')):
+                return False
+            if side is not None and getattr(p, 'side', None) != side:
+                return False
+            if loop_id is not None and not getattr(p, 'strategy_id', '').startswith(f'{loop_id}:'):
+                return False
+            return True
+        return [p for p in positions if ok(p)]
+
+    async def _close_one(self, pos, exchange) -> dict:
         order = Order(
             id=str(uuid.uuid4()),
             symbol=pos.symbol,
-            side="SELL",
-            type="MARKET",
+            side=self._closing_side(pos.side),
+            type='MARKET',
             quantity=pos.quantity,
             price=None,
-            status="PENDING",
+            status='PENDING',
             exchange_order_id=None,
+            reduce_only=True,
         )
-        await self._engine.exchange.place_order(order)
-        return True
+        await exchange.place_order(order)
+        after = await exchange.get_positions()
+        residual = next(
+            (p for p in after
+             if p.symbol == pos.symbol and getattr(p, 'side', None) == pos.side),
+            None,
+        )
+        if residual is None:
+            return {'status': 'closed', 'symbol': pos.symbol, 'side': pos.side, 'residual_qty': 0.0}
+        return {'status': 'partial', 'symbol': pos.symbol, 'side': pos.side, 'residual_qty': residual.quantity}
+
+    async def close_position(self, symbol: str, *, side: str | None = None,
+                             loop_id: str | None = None) -> dict:
+        results = []
+        for e in self._all_engines():
+            for p in self._match(await e.exchange.get_positions(), symbol, side, loop_id):
+                results.append(await self._close_one(p, e.exchange))
+        if not results:
+            return {'status': 'not_found', 'symbol': symbol, 'side': side, 'residual_qty': 0.0}
+        if len(results) == 1:
+            return results[0]
+        return {
+            'status': 'closed' if all(r['status'] == 'closed' for r in results) else 'partial',
+            'symbol': symbol, 'side': side,
+            'residual_qty': sum(r['residual_qty'] for r in results),
+        }
+
+    async def flatten(self) -> list[dict]:
+        results = []
+        for e in self._all_engines():
+            for p in await e.exchange.get_positions():
+                results.append(await self._close_one(p, e.exchange))
+        return results
+
+    async def move_to_breakeven(self, symbol: str, *, side: str | None = None,
+                                loop_id: str | None = None) -> dict:
+        for e in self._all_engines():
+            matches = self._match(await e.exchange.get_positions(), symbol, side, loop_id)
+            if not matches:
+                continue
+            pos = matches[0]
+            ex = e.exchange
+            if not hasattr(ex, 'move_stop_to_breakeven'):
+                return {'status': 'unsupported', 'symbol': pos.symbol, 'side': pos.side}
+            await ex.move_stop_to_breakeven(
+                symbol=pos.symbol, side=pos.side, quantity=pos.quantity,
+                entry_price=pos.entry_price, old_stop_order_id=None,
+            )
+            return {'status': 'moved', 'symbol': pos.symbol, 'side': pos.side}
+        return {'status': 'not_found', 'symbol': symbol, 'side': side}

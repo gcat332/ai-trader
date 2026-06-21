@@ -223,11 +223,21 @@ async def test_get_risk_status_returns_risk_manager_state(engine, repo):
 
 
 @pytest.mark.asyncio
-async def test_close_position_returns_true_when_found(engine, repo):
+async def test_close_position_returns_closed_dict_when_found(engine, repo):
+    pos = MagicMock(symbol="BTC/USDT", quantity=0.01, side="LONG")
+    engine.exchange.get_positions = AsyncMock(side_effect=[[pos], []])
     ctrl = LiveEngineController(engine=engine, repo=repo, daily_start_balance=10000.0)
     result = await ctrl.close_position("BTC/USDT")
     engine.exchange.place_order.assert_awaited_once()
-    assert result is True
+    order = engine.exchange.place_order.await_args.args[0]
+    assert order.side == "SELL"
+    assert order.reduce_only is True
+    assert result == {
+        "status": "closed",
+        "symbol": "BTC/USDT",
+        "side": "LONG",
+        "residual_qty": 0.0,
+    }
 
 
 @pytest.mark.asyncio
@@ -235,7 +245,12 @@ async def test_close_position_returns_false_when_not_found(engine, repo):
     engine.exchange.get_positions = AsyncMock(return_value=[])
     ctrl = LiveEngineController(engine=engine, repo=repo, daily_start_balance=10000.0)
     result = await ctrl.close_position("ETH/USDT")
-    assert result is False
+    assert result == {
+        "status": "not_found",
+        "symbol": "ETH/USDT",
+        "side": None,
+        "residual_qty": 0.0,
+    }
 
 
 @pytest.mark.asyncio

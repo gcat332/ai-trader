@@ -67,7 +67,12 @@ def mock_controller():
         "strategy_id": "rsi_macd",
     }
     ctrl.get_pnl.return_value = {"daily": 182.0, "total": 1540.0}
-    ctrl.close_position.return_value = True
+    ctrl.close_position.return_value = {
+        "status": "closed",
+        "symbol": "BTC",
+        "side": None,
+        "residual_qty": 0.0,
+    }
     return ctrl
 
 
@@ -113,6 +118,17 @@ async def test_handle_pnl_command(mock_controller):
 
 
 @pytest.mark.asyncio
+async def test_cmd_open_positions_preserves_spot_unrealized_without_dollar(mock_controller):
+    notifier = TelegramNotifier(token="fake", chat_id="123", controller=mock_controller)
+    update = MagicMock()
+    update.message.reply_text = AsyncMock()
+    await notifier.cmd_open_positions(update, None)
+    update.message.reply_text.assert_awaited_once_with(
+        "BTC/USDT qty=0.01 unrealized=50.00"
+    )
+
+
+@pytest.mark.asyncio
 async def test_handle_close_command(mock_controller):
     notifier = TelegramNotifier(token="fake", chat_id="123", controller=mock_controller)
     update = MagicMock()
@@ -120,9 +136,38 @@ async def test_handle_close_command(mock_controller):
     context = MagicMock()
     context.args = ["BTC"]
     await notifier.cmd_close(update, context)
-    mock_controller.close_position.assert_awaited_once_with("BTC")
-    call_text = update.message.reply_text.call_args[0][0]
-    assert "closed" in call_text.lower() or "BTC" in call_text
+    mock_controller.close_position.assert_not_awaited()
+    assert len(notifier._pending) == 1
+    pending = next(iter(notifier._pending.values()))
+    assert pending["action"] == "close"
+    assert pending["args"] == {"symbol": "BTC", "side": None, "loop_id": None}
+    text = update.message.reply_text.await_args.args[0]
+    assert "Close BTC" in text
+
+
+@pytest.mark.asyncio
+async def test_handle_close_command_reports_not_found(mock_controller):
+    mock_controller.close_position.return_value = {
+        "status": "not_found",
+        "symbol": "BTC",
+        "side": None,
+        "residual_qty": 0.0,
+    }
+    notifier = TelegramNotifier(token="fake", chat_id="123", controller=mock_controller)
+    update = MagicMock()
+    update.message.reply_text = AsyncMock()
+    context = MagicMock()
+    context.args = ["BTC"]
+
+    await notifier.cmd_close(update, context)
+
+    mock_controller.close_position.assert_not_awaited()
+    assert len(notifier._pending) == 1
+    pending = next(iter(notifier._pending.values()))
+    assert pending["action"] == "close"
+    assert pending["args"] == {"symbol": "BTC", "side": None, "loop_id": None}
+    text = update.message.reply_text.await_args.args[0]
+    assert "Close BTC" in text
 
 
 def _unauthorized_update():

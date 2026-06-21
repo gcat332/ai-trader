@@ -442,3 +442,158 @@ Validation: Red focused run
 Notes for Next Agent: Spot/non-futures paths were not changed. Pre-existing
 untracked package.json and package-lock.json were not modified or staged.
 ---
+---
+Timestamp: 2026-06-21 14:41:01 +0700
+Agent: Codex
+Task: Preserve /open_positions spot unrealized format
+Files Modified: notifier/telegram.py, tests/test_telegram.py,
+tests/test_telegram_futures_positions.py, .superpowers/sdd/task-3-report.md,
+changes.log
+Summary of Changes: Updated cmd_open_positions so SPOT rows use the old
+no-dollar-sign unrealized format while FUTURES rows continue through the shared
+position helper. Strengthened the spot helper assertion to exact string equality
+and added a command-level regression test for spot /open_positions output.
+Validation: .venv/bin/python -m pytest tests/test_telegram_futures_positions.py
+tests/test_telegram.py tests/test_telegram_multiloop.py -q -> 36 passed in
+0.12s.
+Notes for Next Agent: The helper still intentionally includes a dollar sign for
+spot because format_strategy_list's previous output did; only cmd_open_positions
+has the legacy no-dollar spot format.
+---
+---
+Timestamp: 2026-06-21 14:49:32 +0700
+Agent: Codex
+Task: Implement Task 4 SAFETY-CRITICAL close-by-identity order path
+Files Modified: core/live_controller.py, notifier/engine_controller.py,
+tests/test_close_identity.py, tests/test_live_controller.py, changes.log
+Summary of Changes: Added identity-scoped close_position(symbol, side, loop_id)
+with reduce-only market closes, side derived from the live position, read-back
+flat confirmation/residual reporting, flatten(), and move_to_breakeven(). Updated
+the EngineController ABC and stale live-controller close tests to the new dict
+return contract.
+Validation: Red phase .venv/bin/python -m pytest tests/test_close_identity.py -v
+-> 4 failed for missing side/flatten contract. Green focused runs passed:
+.venv/bin/python -m pytest tests/test_close_identity.py -v -> 4 passed;
+.venv/bin/python -m pytest tests/test_close_identity.py tests/test_telegram.py -v
+-> 25 passed; .venv/bin/python -m pytest tests/test_live_controller.py
+tests/test_close_identity.py -v -> 16 passed. Full suite .venv/bin/python -m
+pytest -> 542 passed, 6 skipped, 1 warning.
+Notes for Next Agent: tests/test_live_controller.py was also updated because the
+full suite still asserted the old bool close_position contract there. Existing
+untracked package.json and package-lock.json were not modified or staged.
+---
+---
+Timestamp: 2026-06-21 14:59:37 +0700
+Agent: Codex
+Task: Fix Task 4 safety-critical close routing and Telegram /close handling
+Files Modified: core/live_controller.py, notifier/telegram.py,
+tests/test_close_identity.py, tests/test_telegram.py, .superpowers/sdd/task-4-report.md,
+changes.log
+Summary of Changes: Routed close_position(), flatten(), and move_to_breakeven()
+through every owning engine via _all_engines(), and changed _close_one() to place
+orders and read residual positions through the passed exchange. Tightened symbol
+matching to exact or slash-qualified matches. Updated Telegram /close to branch
+on dict status so not_found is not reported as closed. Added regressions for
+multi-engine flatten ownership, partial residual read-back, unsupported
+breakeven, and /close not_found replies.
+Validation: Red focused run
+.venv/bin/python -m pytest tests/test_close_identity.py tests/test_telegram.py
+tests/test_live_controller.py -q -> 3 failed, 38 passed. Green focused run of
+the same command -> 41 passed in 0.11s. Full suite .venv/bin/python -m pytest -q
+-> 546 passed, 6 skipped, 1 warning in 4.77s.
+Notes for Next Agent: Pre-existing untracked package.json and package-lock.json
+were not modified or staged. The requested task-4 report note was appended on
+disk; .superpowers remains ignored by Git in this working tree.
+---
+---
+Timestamp: 2026-06-21 15:06:51 +0700
+Agent: Codex
+Task: Implement Task 5 SAFETY leverage-aware two-tier liquidation warning
+Files Modified: notifier/telegram.py, core/trading_loop.py,
+tests/test_liq_warning.py, changes.log
+Summary of Changes: Added leverage-tiered liquidation warning bands and the
+Telegram proactive warning path with soft-tier once-per-band de-dup/re-arm and
+hard-tier every-poll alerts. Wired the trading loop to call the notifier after
+the live outcome snapshot using LiveEngineController._position_dict so it sees
+the same widened futures position fields as Telegram commands. Spot positions
+and futures positions with no liquidation price are skipped.
+Validation: Red phase .venv/bin/python -m pytest tests/test_liq_warning.py -v
+-> expected ImportError for missing liq_warning_tier. Green focused
+.venv/bin/python -m pytest tests/test_liq_warning.py -v -> 5 passed. Adjacent
+focused .venv/bin/python -m pytest tests/test_liq_warning.py
+tests/test_trading_loop_futures.py -v -> 10 passed, 1 warning. Full suite
+.venv/bin/python -m pytest -> 551 passed, 6 skipped, 1 warning.
+Notes for Next Agent: core/live_controller.py does not import core/trading_loop.py,
+so the requested top-level LiveEngineController import is one-directional.
+tests/test_trading_loop.py is absent in this checkout; tests/test_trading_loop_futures.py
+was run as the adjacent trading-loop check. Pre-existing untracked package.json
+and package-lock.json were not modified or staged.
+---
+---
+Timestamp: 2026-06-21 15:21:34 +0700
+Agent: Codex
+Task: Fix Task 6 Telegram confirmation conformance
+Files Modified: notifier/telegram.py, tests/test_telegram_confirm.py,
+.superpowers/sdd/task-6-report.md, changes.log
+Summary of Changes: Replaced confirmation state/method behavior with the
+requested spec code: typed pending store, monotonic expiry, label preservation,
+atomic pop(nonce, None), cancel nonce consumption, effective_chat authorization,
+and close/be/stop_bot/flatten action names. Replaced the confirmation tests
+with the Task 6 brief Step 1 block, removing the incorrect cancel replay test.
+Validation: .venv/bin/python -m pytest tests/test_telegram_confirm.py -q ->
+4 passed. Full suite .venv/bin/python -m pytest -q -> 555 passed, 6 skipped,
+1 warning.
+Notes for Next Agent: .superpowers is ignored in this worktree, so the Task 6
+report note was updated on disk but may not be included in the normal commit.
+Pre-existing untracked package.json and package-lock.json were not modified.
+---
+---
+Timestamp: 2026-06-21 15:28:52 +0700
+Agent: Codex
+Task: Implement Task 7 inline Close/SL→BE Telegram buttons with identity callbacks
+Files Modified: notifier/telegram.py, tests/test_telegram_buttons.py,
+.superpowers/sdd/task-7-report.md, changes.log
+Summary of Changes: Added identity callback buttons for futures positions,
+callback parsing with empty-loop support, authorized close/be action routing,
+Close confirmation handoff, default-off SL→BE execution, per-futures
+/open_positions reply markup while preserving spot no-dollar output, callback
+handler registration, and liquidation warning push markup.
+Validation: Red phase .venv/bin/python -m pytest tests/test_telegram_buttons.py
+-v -> missing _position_buttons collection error. Added liquidation-warning
+push coverage red -> 1 failed, 7 passed because reply_markup was absent. Green
+.venv/bin/python -m pytest tests/test_telegram_buttons.py -v -> 8 passed.
+Spot regression .venv/bin/python -m pytest
+tests/test_telegram.py::test_cmd_open_positions_preserves_spot_unrealized_without_dollar
+-v -> 1 passed. Adjacent Telegram .venv/bin/python -m pytest
+tests/test_telegram_buttons.py tests/test_telegram_confirm.py tests/test_telegram.py
+-v -> 34 passed. Full suite .venv/bin/python -m pytest -x -> 563 passed,
+6 skipped, 1 warning.
+Notes for Next Agent: LIVE_TRADING_ENABLED was not changed. .superpowers remains
+ignored in this worktree, so the Task 7 report exists on disk but may not be
+included in the normal commit. Pre-existing untracked package.json and
+package-lock.json were not modified or staged.
+---
+---
+Timestamp: 2026-06-21 15:43:22 +0700
+Agent: Codex
+Task: Implement Task 9 native Telegram autocomplete, drawdown headroom, and quiet routine summaries
+Files Modified: notifier/telegram.py, core/live_controller.py,
+tests/test_telegram_polish.py, .superpowers/sdd/task-9-report.md, changes.log
+Summary of Changes: Added Telegram bot native autocomplete for the eight core
+commands, merged send(text, *, quiet=False, **kwargs) so quiet notifications map
+to disable_notification without breaking reply_markup passthrough, made daily
+and weekly summaries quiet, rendered drawdown headroom only when account-level
+drawdown data is present, and passed current_drawdown_pct through
+LiveEngineController.get_risk_status() only behind a risk-manager hasattr guard.
+Validation: Red phase .venv/bin/python -m pytest tests/test_telegram_polish.py
+-v -> 6 failed, 2 passed. Green Task 9 run -> 8 passed. Adjacent Telegram run
+.venv/bin/python -m pytest tests/test_telegram_polish.py tests/test_telegram.py
+-v -> 30 passed. Full suite .venv/bin/python -m pytest -> 574 passed, 6
+skipped, 1 warning.
+Notes for Next Agent: Existing liquidation warning reply_markup path remains
+intact and covered by tests. LIVE_TRADING_ENABLED was not changed; spot path and
+risk formulas were not touched. .superpowers remains ignored in this worktree,
+so the Task 9 report exists on disk but may not be included in the normal
+commit. Pre-existing untracked package.json and package-lock.json were not
+modified or staged.
+---

@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
+from core.live_controller import LiveEngineController
 from core.live_outcome_tracker import LiveOutcomeTracker
 from core.strategy_arbiter import StrategyArbiter
 from data.fetcher import DataFetcher
@@ -165,6 +166,11 @@ async def run_trading_loop(
                         await engine.record_trade_outcome(trade)  # stamps trade.strategy_id
                         await repo.insert_trade(trade)  # persist to live trade log (Trade History/Compare)
                     outcome_tracker.snapshot(_mine(await exchange.get_positions()))
+                    if notifier is not None and hasattr(notifier, "maybe_warn_liquidation"):
+                        await notifier.maybe_warn_liquidation(
+                            [LiveEngineController._position_dict(p) for p in positions_now],
+                            last_close,
+                        )
 
                     # Drift check every N candles (configurable via DRIFT_CHECK_INTERVAL env var)
                     drift_tick += 1

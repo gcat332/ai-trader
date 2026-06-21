@@ -3,6 +3,8 @@ import asyncio
 import contextlib
 import logging
 import os
+import secrets
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from core.models import Order, Signal
@@ -10,6 +12,43 @@ from notifier.engine_controller import EngineController
 
 logger = logging.getLogger("notifier.telegram")
 THAI_TZ = ZoneInfo("Asia/Bangkok")
+
+# Leverage-tiered liquidation bands as price-distance |mark-liq|/mark.
+# (soft = warn once, hard = repeat every poll). Override via env if needed.
+_LIQ_BANDS = [
+    (5, 0.08, 0.04),
+    (10, 0.04, 0.02),
+    (20, 0.02, 0.01),
+]
+_LIQ_BANDS_DEFAULT = (0.01, 0.005)  # > 20x
+
+
+def _liq_bands_for(leverage: int) -> tuple[float, float]:
+    for cap, soft, hard in _LIQ_BANDS:
+        if leverage <= cap:
+            return soft, hard
+    return _LIQ_BANDS_DEFAULT
+
+
+def liq_warning_tier(mark: float, liq: float, leverage: int) -> str:
+    if not liq or not mark:
+        return "none"
+    distance = abs(mark - liq) / mark
+    soft, hard = _liq_bands_for(leverage)
+    if distance <= hard:
+        return "hard"
+    if distance <= soft:
+        return "soft"
+    return "none"
+
+
+def format_liq_warning(p: dict, mark: float, distance_pct: float) -> str:
+    return (
+        f"⚠️ NEAR LIQUIDATION · {p['symbol']} {p.get('side')} {p.get('leverage')}x\n"
+        f"Mark: {mark:,.0f}  |  Liq: {p['liquidation_price']:,.0f}\n"
+        f"Distance: {distance_pct:.2%}\n"
+        f"uPnL: ${p.get('unrealized_pnl', 0.0):.2f}"
+    )
 
 
 def _as_thai_time(value: datetime | None = None) -> datetime:
@@ -36,19 +75,27 @@ def _display_date(day: str | None) -> str:
         return day
 
 
-def format_signal_alert(signal: Signal) -> str:
-    emoji = "🟢" if signal.side == "BUY" else "🔴"
+def format_signal_alert(signal: Signal, *, mode: str = "SPOT", leverage: int = 1) -> str:
+    futures = mode == "FUTURES"
+    if futures:
+        emoji, direction = ("🟢", "LONG") if signal.side == "BUY" else ("🔴", "SHORT")
+        head = f"{emoji} {direction} {leverage}x · {signal.strategy_id}"
+    else:
+        emoji = "🟢" if signal.side == "BUY" else "🔴"
+        head = f"{emoji} Signal · {signal.strategy_id}"
     tp = f"{signal.take_profit:,.0f}" if signal.take_profit else "—"
     sl = f"{signal.stop_loss:,.0f}" if signal.stop_loss else "—"
+    side_word = signal.side if not futures else ("LONG" if signal.side == "BUY" else "SHORT")
     text = (
-        f"{emoji} Signal · {signal.strategy_id}\n"
+        f"{head}\n"
         f"{_thai_datetime(signal.timestamp)}\n\n"
-        f"{signal.side} {signal.symbol} @ {signal.entry_price:,.0f}\n"
+        f"{side_word} {signal.symbol} @ {signal.entry_price:,.0f}\n"
         f"TP: {tp}  |  SL: {sl}\n"
         f"Confidence: {signal.confidence:.0%}"
     )
+    if futures:
+        text += f"\nLeverage: {leverage}x"
     if signal.narrative:
-        # Add abbreviated narrative (first 2 parts only to keep message short)
         short = " | ".join(signal.narrative.split(" | ")[:2])
         text += f"\n{short}"
     return text
@@ -56,6 +103,31 @@ def format_signal_alert(signal: Signal) -> str:
 
 def _money(v: float) -> str:
     return f"{'+' if v >= 0 else '-'}${abs(v):,.2f}"
+
+
+def _format_position_line(p: dict) -> str:
+    sym = p["symbol"]
+    qty = p["quantity"]
+    upnl = p.get("unrealized_pnl", 0.0)
+    if p.get("mode") == "FUTURES":
+        side = p.get("side") or "?"
+        lev = p.get("leverage", 1)
+        liq = p.get("liquidation_price")
+        margin = p.get("initial_margin")
+        liq_txt = f"liq {liq:,.0f}" if liq is not None else "liq —"
+        margin_txt = f"margin {margin:,.0f}" if margin is not None else "margin —"
+        return f"  • {sym} {side} {lev}x · {liq_txt} · qty={qty} · {margin_txt} · uPnL ${upnl:.1f}"
+    return f"  • {sym} qty={qty} unrealized=${upnl:.2f}"
+
+
+def _position_buttons(p: dict):
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    loop = p.get("loop_id") or ""
+    ident = f"{loop}:{p['symbol']}:{p.get('side') or ''}"
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("Close", callback_data=f"close:{ident}"),
+        InlineKeyboardButton("SL→BE", callback_data=f"be:{ident}"),
+    ]])
 
 
 def format_daily_summary(
@@ -130,16 +202,27 @@ def format_weekly_summary(trades: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def format_order_alert(order: Order, entry_price: float, realized_pnl: float) -> str:
+def format_order_alert(order: Order, entry_price: float, realized_pnl: float,
+                       *, position: dict | None = None) -> str:
     emoji = "🟢" if realized_pnl >= 0 else "🔴"
     sign = "+" if realized_pnl >= 0 else ""
     pct = ((order.price - entry_price) / entry_price * 100) if entry_price else 0
-    return (
+    text = (
         f"{emoji} Order Filled · {order.strategy_id or 'unknown'}\n"
         f"{_thai_datetime()}\n\n"
         f"{order.symbol} {order.side} @ {order.price:,.0f}\n"
         f"PnL: {sign}${realized_pnl:.2f} ({sign}{pct:.1f}%)"
     )
+    if position and position.get("mode") == "FUTURES":
+        lev = position.get("leverage", 1)
+        liq = position.get("liquidation_price")
+        margin = position.get("initial_margin")
+        text += f"\nLeverage: {lev}x"
+        if liq is not None:
+            text += f"\nLiq: {liq:,.0f}"
+        if margin is not None:
+            text += f"\nMargin: {margin:,.0f}"
+    return text
 
 
 def format_drift_alert(event: "DriftEvent") -> str:
@@ -185,6 +268,7 @@ def format_strategy_list(strategies: list[dict]) -> str:
             "",
             f"{state_icon} {s['loop_id']} / {s['strategy_name']}",
             f"Mode: {s.get('mode', 'unknown')}",
+            *([f"Market: {s['market']}"] if s.get("market") else []),
             *([f"Strategy mode: {strategy_mode}"] if strategy_mode else []),
             *([f"Arbiter: {arbiter_mode}"] if arbiter_mode else []),
             *([f"Active: {active}"] if active else []),
@@ -200,10 +284,7 @@ def format_strategy_list(strategies: list[dict]) -> str:
         ])
         if positions:
             lines.append("Open positions:")
-            lines.extend(
-                f"  • {p['symbol']} qty={p['quantity']} unrealized=${p['unrealized_pnl']:.2f}"
-                for p in positions
-            )
+            lines.extend(_format_position_line(p) for p in positions)
     return "\n".join(lines)
 
 
@@ -254,6 +335,11 @@ def format_risk_status(status: dict) -> str:
         f"Max drawdown: {_pct(status.get('max_drawdown_limit_pct'))}",
         f"Max exposure: {_pct(status.get('max_exposure_pct'))}",
     ]
+    current_dd = status.get("current_drawdown_pct")
+    max_dd = status.get("max_drawdown_limit_pct")
+    if current_dd is not None and max_dd is not None:
+        headroom = max_dd - current_dd
+        lines.append(f"Drawdown headroom: {headroom:.0%} (of {max_dd:.0%} max)")
     if status.get("global_kill_reason"):
         lines.append(f"Global reason: {status['global_kill_reason']}")
     if status.get("circuit_reason"):
@@ -315,6 +401,9 @@ class TelegramNotifier:
         self._app = None  # initialized in start()
         self._health_task = None
         self._health_monitor = None
+        self._liq_soft_warned: set[str] = set()
+        self._pending: dict[str, dict] = {}
+        self._confirm_ttl = float(os.getenv('TELEGRAM_CONFIRM_TTL_SECONDS', '120'))
 
     def _authorized(self, update) -> bool:
         chat = getattr(update, "effective_chat", None)
@@ -329,11 +418,123 @@ class TelegramNotifier:
         await update.message.reply_text("Unauthorized chat.")
         return True
 
-    async def send(self, text: str) -> None:
-        if self._app is None:
-            logger.warning("TelegramNotifier.send() called but bot not started — message dropped")
+    def _make_confirm(self, action: str, args: dict, label: str):
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        nonce = secrets.token_hex(4)
+        self._pending[nonce] = {
+            'action': action, 'args': args, 'label': label,
+            'expires': time.monotonic() + self._confirm_ttl,
+        }
+        text = f'{label}\nConfirm?'
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton('✅ Yes', callback_data=f'confirm:{nonce}'),
+            InlineKeyboardButton('✖ No', callback_data=f'cancel:{nonce}'),
+        ]])
+        return text, markup
+
+    def _authorized_callback(self, update) -> bool:
+        chat = getattr(update, 'effective_chat', None)
+        chat_id = getattr(chat, 'id', None)
+        if chat_id is None:
+            return True
+        return str(chat_id) == str(self._chat_id)
+
+    @staticmethod
+    def _parse_ident(rest: str) -> dict:
+        # rest = "<loop>:<symbol>:<side>"; symbol may contain no ":"
+        loop, symbol, side = (rest.split(":", 2) + ["", "", ""])[:3]
+        return {"loop_id": loop or None, "symbol": symbol, "side": side or None}
+
+    async def _on_action(self, update, context) -> None:
+        query = update.callback_query
+        await query.answer()
+        if not self._authorized_callback(update):
+            await query.edit_message_text("Unauthorized chat.")
             return
-        await self._app.bot.send_message(chat_id=self._chat_id, text=text)
+        kind, _, rest = query.data.partition(":")
+        args = self._parse_ident(rest)
+        if kind == "close":
+            label = f"Close {args['symbol']} {args['side'] or ''}".strip()
+            text, markup = self._make_confirm("close", args, label)
+            await query.message.reply_text(text, reply_markup=markup)
+            return
+        if kind == "be":
+            # Default-off with partial TP until a strategy is validated.
+            if os.getenv("TELEGRAM_ENABLE_BE_BUTTON", "false").lower() not in ("1", "true", "yes"):
+                await query.message.reply_text("SL→BE is disabled (set TELEGRAM_ENABLE_BE_BUTTON=true).")
+                return
+            result = await self._execute_action("be", args)
+            await query.message.reply_text(result)
+
+    async def _on_confirm(self, update, context) -> None:
+        query = update.callback_query
+        await query.answer()
+        if not self._authorized_callback(update):
+            await query.edit_message_text('Unauthorized chat.')
+            return
+        kind, _, nonce = query.data.partition(':')
+        pending = self._pending.pop(nonce, None)
+        if pending is None or pending['expires'] < time.monotonic():
+            await query.edit_message_text(
+                'This action is old — /open_positions to act on current positions.'
+            )
+            return
+        if kind == 'cancel':
+            await query.edit_message_text('Cancelled.')
+            return
+        result = await self._execute_action(pending['action'], pending['args'])
+        await query.edit_message_text(result)
+
+    async def _execute_action(self, action: str, args: dict) -> str:
+        if action == 'close':
+            res = await self._controller.close_position(
+                args['symbol'], side=args.get('side'), loop_id=args.get('loop_id'))
+            return f"{res['symbol']} {res.get('side') or ''}: {res['status']}"
+        if action == 'be':
+            res = await self._controller.move_to_breakeven(
+                args['symbol'], side=args.get('side'), loop_id=args.get('loop_id'))
+            return f"{res['symbol']} {res.get('side') or ''}: SL→BE {res['status']}"
+        if action == 'stop_bot':
+            await self._controller.stop_bot()
+            return 'Bot stopped. Open exchange-side protection is unchanged.'
+        if action == 'flatten':
+            results = await self._controller.flatten()
+            if not results:
+                return 'Nothing to flatten — no open positions.'
+            lines = [f"  • {r['symbol']} {r.get('side') or ''}: {r['status']}"
+                     for r in results]
+            return 'Flatten complete:\n' + '\n'.join(lines)
+        return f'Unknown action: {action}'
+
+    async def send(self, text: str, *, quiet: bool = False, **kwargs) -> None:
+        if self._app is None:
+            logger.warning('TelegramNotifier.send() called but bot not started — message dropped')
+            return
+        await self._app.bot.send_message(
+            chat_id=self._chat_id, text=text, disable_notification=quiet, **kwargs)
+
+    async def maybe_warn_liquidation(self, positions: list[dict], mark: float) -> None:
+        """Fire a near-liquidation alert per the leverage-tiered two-tier model.
+        Soft tier warns once until the position exits the band (re-arm); hard
+        tier repeats every poll. Futures-only; spot/None-liq skipped."""
+        for p in positions:
+            if p.get("mode") != "FUTURES":
+                continue
+            liq = p.get("liquidation_price")
+            if not liq:
+                continue
+            key = f"{p['symbol']}:{p.get('side')}"
+            tier = liq_warning_tier(mark, liq, p.get("leverage", 1) or 1)
+            if tier == "none":
+                self._liq_soft_warned.discard(key)
+                continue
+            if tier == "soft":
+                if key in self._liq_soft_warned:
+                    continue
+                self._liq_soft_warned.add(key)
+            # hard: never dedup (fall through and warn every poll)
+            distance_pct = abs(mark - liq) / mark
+            await self.send(format_liq_warning(p, mark, distance_pct), reply_markup=_position_buttons(p))
 
     async def on_signal(self, signal: Signal) -> None:
         if signal.side != "HOLD":
@@ -389,11 +590,11 @@ class TelegramNotifier:
             day_pnl=day_pnl, total_pnl=total_pnl, wins=wins, trades=n,
             balance=balance, trade_rows=day_trades, open_order_count=open_order_count,
         )
-        await self.send(text)
+        await self.send(text, quiet=True)
 
     async def send_weekly_summary(self, repo) -> None:
         trades = await repo.get_trade_history()
-        await self.send(format_weekly_summary(trades))
+        await self.send(format_weekly_summary(trades), quiet=True)
 
     async def send_drift_alert(self, event) -> None:
         from notifier.telegram import format_drift_alert
@@ -422,7 +623,7 @@ class TelegramNotifier:
             "/start_bot\n/stop_bot\n/restart_bot\n"
             "/start_strategy <loop_id>\n/stop_strategy <loop_id>\n"
             "/portfolio\n/open_positions\n/closed_positions\n"
-            "/signals\n/allocation\n/risk_status\n/health"
+            "/signals\n/allocation\n/risk_status\n/health\n/flatten"
         )
 
     async def cmd_status(self, update, context) -> None:
@@ -579,10 +780,18 @@ class TelegramNotifier:
         if not positions:
             await update.message.reply_text("Open positions: none")
             return
-        await update.message.reply_text("\n".join(
-            f"{p['symbol']} qty={p['quantity']} unrealized={p['unrealized_pnl']:.2f}"
-            for p in positions
-        ))
+        futures = [p for p in positions if p.get("mode") == "FUTURES"]
+        spot = [p for p in positions if p.get("mode") != "FUTURES"]
+        if spot:
+            await update.message.reply_text("\n".join(
+                f"{p['symbol']} qty={p['quantity']} unrealized={p['unrealized_pnl']:.2f}"
+                for p in spot
+            ))
+        for p in futures:
+            await update.message.reply_text(
+                _format_position_line(p).lstrip("• ").strip(),
+                reply_markup=_position_buttons(p),
+            )
 
     async def cmd_closed_positions(self, update, context) -> None:
         if await self._reject_if_unauthorized(update):
@@ -621,22 +830,39 @@ class TelegramNotifier:
         running = sum(1 for s in strategies if s.get("running"))
         await update.message.reply_text(f"Health: ok\nRunning loops: {running}/{len(strategies)}")
 
+    async def cmd_flatten(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
+        status = await self._controller.get_status()
+        positions = status.get("open_positions") or []
+        n = len(positions)
+        if n == 0:
+            await update.message.reply_text("No open positions — nothing to flatten.")
+            return
+        text, markup = self._make_confirm(
+            "flatten", {}, f"⚠️ Close ALL {n} position(s) across all loops?")
+        await update.message.reply_text(text, reply_markup=markup)
+
     async def cmd_close(self, update, context) -> None:
         if await self._reject_if_unauthorized(update):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /close <symbol>  e.g. /close BTC")
+            await update.message.reply_text("Usage: /close <symbol> [LONG|SHORT]  e.g. /close BTC SHORT")
             return
         symbol = context.args[0].upper()
-        closed = await self._controller.close_position(symbol)
-        if closed:
-            await update.message.reply_text(f"✅ {symbol} position closed.")
-        else:
-            await update.message.reply_text(f"⚠️ No open position for {symbol}.")
+        side = context.args[1].upper() if len(context.args) > 1 else None
+        if side not in (None, "LONG", "SHORT"):
+            await update.message.reply_text("Side must be LONG or SHORT.")
+            return
+        args = {"symbol": symbol, "side": side, "loop_id": None}
+        label = f"Close {symbol} {side or ''}".strip()
+        text, markup = self._make_confirm("close", args, label)
+        await update.message.reply_text(text, reply_markup=markup)
 
     async def start(self) -> None:
         """Build and start the Telegram Application. Call once at bot startup."""
-        from telegram.ext import Application, CommandHandler
+        from telegram import BotCommand
+        from telegram.ext import Application, CallbackQueryHandler, CommandHandler
         self._app = Application.builder().token(self._token).build()
         self._app.add_handler(CommandHandler("start", self.cmd_help))
         self._app.add_handler(CommandHandler("help", self.cmd_help))
@@ -659,9 +885,22 @@ class TelegramNotifier:
         self._app.add_handler(CommandHandler("risk_status", self.cmd_risk_status))
         self._app.add_handler(CommandHandler("health", self.cmd_health))
         self._app.add_handler(CommandHandler("close", self.cmd_close))
+        self._app.add_handler(CommandHandler("flatten", self.cmd_flatten))
+        self._app.add_handler(CallbackQueryHandler(self._on_confirm, pattern=r"^(confirm|cancel):"))
+        self._app.add_handler(CallbackQueryHandler(self._on_action, pattern=r"^(close|be):"))
         await self._app.initialize()
         await self._app.updater.start_polling()
         await self._app.start()
+        await self._app.bot.set_my_commands([
+            BotCommand("status", "Bot + positions status"),
+            BotCommand("pnl", "Profit & loss"),
+            BotCommand("open_positions", "Open positions"),
+            BotCommand("close", "Close a position (symbol [LONG|SHORT])"),
+            BotCommand("flatten", "Close ALL positions (panic)"),
+            BotCommand("pause", "Pause new orders"),
+            BotCommand("resume", "Resume trading"),
+            BotCommand("help", "List commands"),
+        ])
         interval = float(os.getenv("TELEGRAM_HEALTH_CHECK_SECONDS", "60"))
         if interval > 0:
             self._health_monitor = TelegramConnectivityMonitor(
