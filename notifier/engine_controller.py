@@ -27,8 +27,22 @@ class EngineController(ABC):
         """Return PnL for one strategy runtime."""
 
     @abstractmethod
-    async def close_position(self, symbol: str) -> bool:
-        """Force-close open position for symbol. Return True if closed, False if not found."""
+    async def close_position(self, symbol: str, *, side: str | None = None,
+                             loop_id: str | None = None) -> dict:
+        """Close the identity-matched position (symbol [+ side + loop_id]).
+        reduce-only; side derived from the position (LONG→SELL, SHORT→BUY).
+        Returns {status, symbol, side, residual_qty}."""
+
+    @abstractmethod
+    async def flatten(self) -> list[dict]:
+        """Close every open position across all loops (reduce-only). Returns
+        one result dict per position."""
+
+    @abstractmethod
+    async def move_to_breakeven(self, symbol: str, *, side: str | None = None,
+                                loop_id: str | None = None) -> dict:
+        """Move the matched position's stop to entry (breakeven). Returns
+        {status, symbol, side}."""
 
     @abstractmethod
     async def start_bot(self) -> None:

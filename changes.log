@@ -460,3 +460,25 @@ Notes for Next Agent: The helper still intentionally includes a dollar sign for
 spot because format_strategy_list's previous output did; only cmd_open_positions
 has the legacy no-dollar spot format.
 ---
+---
+Timestamp: 2026-06-21 14:49:32 +0700
+Agent: Codex
+Task: Implement Task 4 SAFETY-CRITICAL close-by-identity order path
+Files Modified: core/live_controller.py, notifier/engine_controller.py,
+tests/test_close_identity.py, tests/test_live_controller.py, changes.log
+Summary of Changes: Added identity-scoped close_position(symbol, side, loop_id)
+with reduce-only market closes, side derived from the live position, read-back
+flat confirmation/residual reporting, flatten(), and move_to_breakeven(). Updated
+the EngineController ABC and stale live-controller close tests to the new dict
+return contract.
+Validation: Red phase .venv/bin/python -m pytest tests/test_close_identity.py -v
+-> 4 failed for missing side/flatten contract. Green focused runs passed:
+.venv/bin/python -m pytest tests/test_close_identity.py -v -> 4 passed;
+.venv/bin/python -m pytest tests/test_close_identity.py tests/test_telegram.py -v
+-> 25 passed; .venv/bin/python -m pytest tests/test_live_controller.py
+tests/test_close_identity.py -v -> 16 passed. Full suite .venv/bin/python -m
+pytest -> 542 passed, 6 skipped, 1 warning.
+Notes for Next Agent: tests/test_live_controller.py was also updated because the
+full suite still asserted the old bool close_position contract there. Existing
+untracked package.json and package-lock.json were not modified or staged.
+---

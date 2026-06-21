@@ -233,20 +233,82 @@ class LiveEngineController(EngineController):
         status["available"] = True
         return status
 
-    async def close_position(self, symbol: str) -> bool:
-        positions = await self._engine.exchange.get_positions()
-        pos = next((p for p in positions if p.symbol == symbol or p.symbol.startswith(symbol)), None)
-        if pos is None:
-            return False
+    @staticmethod
+    def _closing_side(position_side: str) -> str:
+        return "SELL" if position_side == "LONG" else "BUY"
+
+    def _match(self, positions, symbol, side, loop_id):
+        def ok(p):
+            if not (p.symbol == symbol or p.symbol.startswith(symbol)):
+                return False
+            if side is not None and getattr(p, "side", None) != side:
+                return False
+            if loop_id is not None and not getattr(p, "strategy_id", "").startswith(f"{loop_id}:"):
+                return False
+            return True
+        return [p for p in positions if ok(p)]
+
+    async def _close_one(self, pos) -> dict:
         order = Order(
             id=str(uuid.uuid4()),
             symbol=pos.symbol,
-            side="SELL",
+            side=self._closing_side(getattr(pos, "side", "LONG")),
             type="MARKET",
             quantity=pos.quantity,
             price=None,
             status="PENDING",
             exchange_order_id=None,
+            reduce_only=True,
         )
         await self._engine.exchange.place_order(order)
-        return True
+        # Read back: confirm the position is gone. A reduce-only on an
+        # already-flat position (-2022) is success-equivalent. closePosition
+        # brackets auto-cancel on flat, so no separate resting-order sweep here.
+        after = await self._engine.exchange.get_positions()
+        residual = next(
+            (p for p in after
+             if p.symbol == pos.symbol and getattr(p, "side", None) == getattr(pos, "side", None)),
+            None,
+        )
+        if residual is None:
+            return {"status": "closed", "symbol": pos.symbol,
+                    "side": getattr(pos, "side", None), "residual_qty": 0.0}
+        return {"status": "partial", "symbol": pos.symbol,
+                "side": getattr(pos, "side", None), "residual_qty": residual.quantity}
+
+    async def close_position(self, symbol: str, *, side: str | None = None,
+                             loop_id: str | None = None) -> dict:
+        positions = await self._engine.exchange.get_positions()
+        matches = self._match(positions, symbol, side, loop_id)
+        if not matches:
+            return {"status": "not_found", "symbol": symbol, "side": side, "residual_qty": 0.0}
+        # Close every matching leg (identity-scoped; usually one).
+        results = [await self._close_one(p) for p in matches]
+        return results[0] if len(results) == 1 else {
+            "status": "closed" if all(r["status"] == "closed" for r in results) else "partial",
+            "symbol": symbol, "side": side,
+            "residual_qty": sum(r["residual_qty"] for r in results),
+        }
+
+    async def flatten(self) -> list[dict]:
+        results = []
+        for e in self._engines:
+            for p in await e.exchange.get_positions():
+                results.append(await self._close_one(p))
+        return results
+
+    async def move_to_breakeven(self, symbol: str, *, side: str | None = None,
+                                loop_id: str | None = None) -> dict:
+        positions = await self._engine.exchange.get_positions()
+        matches = self._match(positions, symbol, side, loop_id)
+        if not matches:
+            return {"status": "not_found", "symbol": symbol, "side": side}
+        pos = matches[0]
+        ex = self._engine.exchange
+        if not hasattr(ex, "move_stop_to_breakeven"):
+            return {"status": "unsupported", "symbol": pos.symbol, "side": pos.side}
+        await ex.move_stop_to_breakeven(
+            symbol=pos.symbol, side=pos.side, quantity=pos.quantity,
+            entry_price=pos.entry_price, old_stop_order_id=None,
+        )
+        return {"status": "moved", "symbol": pos.symbol, "side": pos.side}
