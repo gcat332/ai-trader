@@ -136,8 +136,13 @@ async def test_handle_close_command(mock_controller):
     context = MagicMock()
     context.args = ["BTC"]
     await notifier.cmd_close(update, context)
-    mock_controller.close_position.assert_awaited_once_with("BTC")
-    update.message.reply_text.assert_awaited_once_with("✅ BTC closed.")
+    mock_controller.close_position.assert_not_awaited()
+    assert len(notifier._pending) == 1
+    pending = next(iter(notifier._pending.values()))
+    assert pending["action"] == "close"
+    assert pending["args"] == {"symbol": "BTC", "side": None, "loop_id": None}
+    text = update.message.reply_text.await_args.args[0]
+    assert "Close BTC" in text
 
 
 @pytest.mark.asyncio
@@ -156,8 +161,13 @@ async def test_handle_close_command_reports_not_found(mock_controller):
 
     await notifier.cmd_close(update, context)
 
-    mock_controller.close_position.assert_awaited_once_with("BTC")
-    update.message.reply_text.assert_awaited_once_with("⚠️ No open position for BTC.")
+    mock_controller.close_position.assert_not_awaited()
+    assert len(notifier._pending) == 1
+    pending = next(iter(notifier._pending.values()))
+    assert pending["action"] == "close"
+    assert pending["args"] == {"symbol": "BTC", "side": None, "loop_id": None}
+    text = update.message.reply_text.await_args.args[0]
+    assert "Close BTC" in text
 
 
 def _unauthorized_update():

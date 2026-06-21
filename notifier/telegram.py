@@ -617,7 +617,7 @@ class TelegramNotifier:
             "/start_bot\n/stop_bot\n/restart_bot\n"
             "/start_strategy <loop_id>\n/stop_strategy <loop_id>\n"
             "/portfolio\n/open_positions\n/closed_positions\n"
-            "/signals\n/allocation\n/risk_status\n/health"
+            "/signals\n/allocation\n/risk_status\n/health\n/flatten"
         )
 
     async def cmd_status(self, update, context) -> None:
@@ -824,21 +824,34 @@ class TelegramNotifier:
         running = sum(1 for s in strategies if s.get("running"))
         await update.message.reply_text(f"Health: ok\nRunning loops: {running}/{len(strategies)}")
 
+    async def cmd_flatten(self, update, context) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
+        status = await self._controller.get_status()
+        positions = status.get("open_positions") or []
+        n = len(positions)
+        if n == 0:
+            await update.message.reply_text("No open positions — nothing to flatten.")
+            return
+        text, markup = self._make_confirm(
+            "flatten", {}, f"⚠️ Close ALL {n} position(s) across all loops?")
+        await update.message.reply_text(text, reply_markup=markup)
+
     async def cmd_close(self, update, context) -> None:
         if await self._reject_if_unauthorized(update):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /close <symbol>  e.g. /close BTC")
+            await update.message.reply_text("Usage: /close <symbol> [LONG|SHORT]  e.g. /close BTC SHORT")
             return
         symbol = context.args[0].upper()
-        result = await self._controller.close_position(symbol)
-        status = result.get('status')
-        if status in ('closed', 'partial'):
-            await update.message.reply_text(f'✅ {symbol} {status}.')
-        elif status == 'not_found':
-            await update.message.reply_text(f'⚠️ No open position for {symbol}.')
-        else:
-            await update.message.reply_text(f'{symbol}: {status}')
+        side = context.args[1].upper() if len(context.args) > 1 else None
+        if side not in (None, "LONG", "SHORT"):
+            await update.message.reply_text("Side must be LONG or SHORT.")
+            return
+        args = {"symbol": symbol, "side": side, "loop_id": None}
+        label = f"Close {symbol} {side or ''}".strip()
+        text, markup = self._make_confirm("close", args, label)
+        await update.message.reply_text(text, reply_markup=markup)
 
     async def start(self) -> None:
         """Build and start the Telegram Application. Call once at bot startup."""
@@ -865,6 +878,7 @@ class TelegramNotifier:
         self._app.add_handler(CommandHandler("risk_status", self.cmd_risk_status))
         self._app.add_handler(CommandHandler("health", self.cmd_health))
         self._app.add_handler(CommandHandler("close", self.cmd_close))
+        self._app.add_handler(CommandHandler("flatten", self.cmd_flatten))
         self._app.add_handler(CallbackQueryHandler(self._on_confirm, pattern=r"^(confirm|cancel):"))
         self._app.add_handler(CallbackQueryHandler(self._on_action, pattern=r"^(close|be):"))
         await self._app.initialize()
