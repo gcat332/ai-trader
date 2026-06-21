@@ -50,6 +50,23 @@ class LiveEngineController(EngineController):
         ids.update({cfg.strategy_instance_id, cfg.loop_id})
         return ids
 
+    @staticmethod
+    def _position_dict(p) -> dict:
+        leverage = getattr(p, "leverage", 1) or 1
+        entry = getattr(p, "entry_price", 0.0) or 0.0
+        qty = p.quantity
+        return {
+            "symbol": p.symbol,
+            "quantity": qty,
+            "unrealized_pnl": p.unrealized_pnl,
+            "side": getattr(p, "side", None),
+            "mode": getattr(p, "mode", "SPOT"),
+            "leverage": leverage,
+            "entry_price": entry,
+            "liquidation_price": getattr(p, "liquidation_price", None),
+            "initial_margin": (entry * qty) / leverage,
+        }
+
     async def pause(self) -> None:
         await self.stop_bot()
 
@@ -93,10 +110,7 @@ class LiveEngineController(EngineController):
             # with one active at a time (arbiter-managed). Expose the full set so the
             # status/reporting shows all of them, not just the active one.
             "techniques": getattr(self._engine.strategy, "strategy_ids", None),
-            "open_positions": [
-                {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
-                for p in positions
-            ],
+            "open_positions": [self._position_dict(p) for p in positions],
             "open_order_count": await self._open_order_count(),
         }
 
@@ -157,13 +171,14 @@ class LiveEngineController(EngineController):
                 "techniques": self._strategy_techniques(r.engine.strategy) or None,
                 "exit_on_opposite_signal": r.config.exit_on_opposite_signal,
                 "mode": r.config.mode,
+                "market": (getattr(r.config, "market", "spot") or "spot").upper(),
                 "running": r.engine.is_running,
                 "symbol": r.config.symbol,
                 "timeframe": r.config.timeframe,
                 "allocation_pct": r.config.allocation_pct,
                 "open_order_count": await self._open_order_count(self._runtime_strategy_ids(r)),
                 "open_positions": [
-                    {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
+                    self._position_dict(p)
                     for p in await r.engine.exchange.get_positions()
                     if getattr(p, "strategy_id", r.config.strategy_instance_id) in self._runtime_strategy_ids(r)
                 ],
@@ -192,13 +207,14 @@ class LiveEngineController(EngineController):
                 "strategy_ids": sorted(strategy_ids),
                 "exit_on_opposite_signal": cfg.exit_on_opposite_signal,
                 "mode": cfg.mode,
+                "market": (getattr(cfg, "market", "spot") or "spot").upper(),
                 "running": runtime.engine.is_running,
                 "symbol": cfg.symbol,
                 "timeframe": cfg.timeframe,
                 "allocation_pct": cfg.allocation_pct,
                 "open_order_count": await self._open_order_count(strategy_ids),
                 "open_positions": [
-                    {"symbol": p.symbol, "quantity": p.quantity, "unrealized_pnl": p.unrealized_pnl}
+                    self._position_dict(p)
                     for p in positions
                     if getattr(p, "strategy_id", cfg.strategy_instance_id) in strategy_ids
                 ],
