@@ -36,19 +36,27 @@ def _display_date(day: str | None) -> str:
         return day
 
 
-def format_signal_alert(signal: Signal) -> str:
-    emoji = "🟢" if signal.side == "BUY" else "🔴"
+def format_signal_alert(signal: Signal, *, mode: str = "SPOT", leverage: int = 1) -> str:
+    futures = mode == "FUTURES"
+    if futures:
+        emoji, direction = ("🟢", "LONG") if signal.side == "BUY" else ("🔴", "SHORT")
+        head = f"{emoji} {direction} {leverage}x · {signal.strategy_id}"
+    else:
+        emoji = "🟢" if signal.side == "BUY" else "🔴"
+        head = f"{emoji} Signal · {signal.strategy_id}"
     tp = f"{signal.take_profit:,.0f}" if signal.take_profit else "—"
     sl = f"{signal.stop_loss:,.0f}" if signal.stop_loss else "—"
+    side_word = signal.side if not futures else ("LONG" if signal.side == "BUY" else "SHORT")
     text = (
-        f"{emoji} Signal · {signal.strategy_id}\n"
+        f"{head}\n"
         f"{_thai_datetime(signal.timestamp)}\n\n"
-        f"{signal.side} {signal.symbol} @ {signal.entry_price:,.0f}\n"
+        f"{side_word} {signal.symbol} @ {signal.entry_price:,.0f}\n"
         f"TP: {tp}  |  SL: {sl}\n"
         f"Confidence: {signal.confidence:.0%}"
     )
+    if futures:
+        text += f"\nLeverage: {leverage}x"
     if signal.narrative:
-        # Add abbreviated narrative (first 2 parts only to keep message short)
         short = " | ".join(signal.narrative.split(" | ")[:2])
         text += f"\n{short}"
     return text
@@ -130,16 +138,27 @@ def format_weekly_summary(trades: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def format_order_alert(order: Order, entry_price: float, realized_pnl: float) -> str:
+def format_order_alert(order: Order, entry_price: float, realized_pnl: float,
+                       *, position: dict | None = None) -> str:
     emoji = "🟢" if realized_pnl >= 0 else "🔴"
     sign = "+" if realized_pnl >= 0 else ""
     pct = ((order.price - entry_price) / entry_price * 100) if entry_price else 0
-    return (
+    text = (
         f"{emoji} Order Filled · {order.strategy_id or 'unknown'}\n"
         f"{_thai_datetime()}\n\n"
         f"{order.symbol} {order.side} @ {order.price:,.0f}\n"
         f"PnL: {sign}${realized_pnl:.2f} ({sign}{pct:.1f}%)"
     )
+    if position and position.get("mode") == "FUTURES":
+        lev = position.get("leverage", 1)
+        liq = position.get("liquidation_price")
+        margin = position.get("initial_margin")
+        text += f"\nLeverage: {lev}x"
+        if liq is not None:
+            text += f"\nLiq: {liq:,.0f}"
+        if margin is not None:
+            text += f"\nMargin: {margin:,.0f}"
+    return text
 
 
 def format_drift_alert(event: "DriftEvent") -> str:
