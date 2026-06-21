@@ -14,7 +14,9 @@ class EngineController(ABC):
 
     @abstractmethod
     async def get_status(self) -> dict:
-        """Return dict with keys: running (bool), open_positions (list), strategy_id (str)."""
+        """Return dict with keys: running (bool), strategy_id (str),
+        open_positions (list of dicts with symbol, quantity, unrealized_pnl,
+        side, mode, leverage, entry_price, liquidation_price, initial_margin)."""
 
     @abstractmethod
     async def get_pnl(self) -> dict:
