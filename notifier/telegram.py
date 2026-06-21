@@ -66,6 +66,21 @@ def _money(v: float) -> str:
     return f"{'+' if v >= 0 else '-'}${abs(v):,.2f}"
 
 
+def _format_position_line(p: dict) -> str:
+    sym = p["symbol"]
+    qty = p["quantity"]
+    upnl = p.get("unrealized_pnl", 0.0)
+    if p.get("mode") == "FUTURES":
+        side = p.get("side") or "?"
+        lev = p.get("leverage", 1)
+        liq = p.get("liquidation_price")
+        margin = p.get("initial_margin")
+        liq_txt = f"liq {liq:,.0f}" if liq is not None else "liq —"
+        margin_txt = f"margin {margin:,.0f}" if margin is not None else "margin —"
+        return f"  • {sym} {side} {lev}x · {liq_txt} · qty={qty} · {margin_txt} · uPnL ${upnl:.1f}"
+    return f"  • {sym} qty={qty} unrealized=${upnl:.2f}"
+
+
 def format_daily_summary(
     total_evaluated: int,
     placed: int,
@@ -204,6 +219,7 @@ def format_strategy_list(strategies: list[dict]) -> str:
             "",
             f"{state_icon} {s['loop_id']} / {s['strategy_name']}",
             f"Mode: {s.get('mode', 'unknown')}",
+            *([f"Market: {s['market']}"] if s.get("market") else []),
             *([f"Strategy mode: {strategy_mode}"] if strategy_mode else []),
             *([f"Arbiter: {arbiter_mode}"] if arbiter_mode else []),
             *([f"Active: {active}"] if active else []),
@@ -219,10 +235,7 @@ def format_strategy_list(strategies: list[dict]) -> str:
         ])
         if positions:
             lines.append("Open positions:")
-            lines.extend(
-                f"  • {p['symbol']} qty={p['quantity']} unrealized=${p['unrealized_pnl']:.2f}"
-                for p in positions
-            )
+            lines.extend(_format_position_line(p) for p in positions)
     return "\n".join(lines)
 
 
@@ -599,8 +612,7 @@ class TelegramNotifier:
             await update.message.reply_text("Open positions: none")
             return
         await update.message.reply_text("\n".join(
-            f"{p['symbol']} qty={p['quantity']} unrealized={p['unrealized_pnl']:.2f}"
-            for p in positions
+            _format_position_line(p).lstrip("• ").strip() for p in positions
         ))
 
     async def cmd_closed_positions(self, update, context) -> None:
