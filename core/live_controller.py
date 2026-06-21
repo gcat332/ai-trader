@@ -231,6 +231,8 @@ class LiveEngineController(EngineController):
             return {"available": False}
         status = self._risk_manager.status()
         status["available"] = True
+        if "current_drawdown_pct" not in status and hasattr(self._risk_manager, "current_drawdown_pct"):
+            status["current_drawdown_pct"] = self._risk_manager.current_drawdown_pct()
         return status
 
     def _all_engines(self):

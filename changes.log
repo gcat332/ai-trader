@@ -573,3 +573,27 @@ ignored in this worktree, so the Task 7 report exists on disk but may not be
 included in the normal commit. Pre-existing untracked package.json and
 package-lock.json were not modified or staged.
 ---
+---
+Timestamp: 2026-06-21 15:43:22 +0700
+Agent: Codex
+Task: Implement Task 9 native Telegram autocomplete, drawdown headroom, and quiet routine summaries
+Files Modified: notifier/telegram.py, core/live_controller.py,
+tests/test_telegram_polish.py, .superpowers/sdd/task-9-report.md, changes.log
+Summary of Changes: Added Telegram bot native autocomplete for the eight core
+commands, merged send(text, *, quiet=False, **kwargs) so quiet notifications map
+to disable_notification without breaking reply_markup passthrough, made daily
+and weekly summaries quiet, rendered drawdown headroom only when account-level
+drawdown data is present, and passed current_drawdown_pct through
+LiveEngineController.get_risk_status() only behind a risk-manager hasattr guard.
+Validation: Red phase .venv/bin/python -m pytest tests/test_telegram_polish.py
+-v -> 6 failed, 2 passed. Green Task 9 run -> 8 passed. Adjacent Telegram run
+.venv/bin/python -m pytest tests/test_telegram_polish.py tests/test_telegram.py
+-v -> 30 passed. Full suite .venv/bin/python -m pytest -> 574 passed, 6
+skipped, 1 warning.
+Notes for Next Agent: Existing liquidation warning reply_markup path remains
+intact and covered by tests. LIVE_TRADING_ENABLED was not changed; spot path and
+risk formulas were not touched. .superpowers remains ignored in this worktree,
+so the Task 9 report exists on disk but may not be included in the normal
+commit. Pre-existing untracked package.json and package-lock.json were not
+modified or staged.
+---

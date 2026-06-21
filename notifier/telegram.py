@@ -335,6 +335,11 @@ def format_risk_status(status: dict) -> str:
         f"Max drawdown: {_pct(status.get('max_drawdown_limit_pct'))}",
         f"Max exposure: {_pct(status.get('max_exposure_pct'))}",
     ]
+    current_dd = status.get("current_drawdown_pct")
+    max_dd = status.get("max_drawdown_limit_pct")
+    if current_dd is not None and max_dd is not None:
+        headroom = max_dd - current_dd
+        lines.append(f"Drawdown headroom: {headroom:.0%} (of {max_dd:.0%} max)")
     if status.get("global_kill_reason"):
         lines.append(f"Global reason: {status['global_kill_reason']}")
     if status.get("circuit_reason"):
@@ -501,11 +506,12 @@ class TelegramNotifier:
             return 'Flatten complete:\n' + '\n'.join(lines)
         return f'Unknown action: {action}'
 
-    async def send(self, text: str, **kwargs) -> None:
+    async def send(self, text: str, *, quiet: bool = False, **kwargs) -> None:
         if self._app is None:
-            logger.warning("TelegramNotifier.send() called but bot not started — message dropped")
+            logger.warning('TelegramNotifier.send() called but bot not started — message dropped')
             return
-        await self._app.bot.send_message(chat_id=self._chat_id, text=text, **kwargs)
+        await self._app.bot.send_message(
+            chat_id=self._chat_id, text=text, disable_notification=quiet, **kwargs)
 
     async def maybe_warn_liquidation(self, positions: list[dict], mark: float) -> None:
         """Fire a near-liquidation alert per the leverage-tiered two-tier model.
@@ -584,11 +590,11 @@ class TelegramNotifier:
             day_pnl=day_pnl, total_pnl=total_pnl, wins=wins, trades=n,
             balance=balance, trade_rows=day_trades, open_order_count=open_order_count,
         )
-        await self.send(text)
+        await self.send(text, quiet=True)
 
     async def send_weekly_summary(self, repo) -> None:
         trades = await repo.get_trade_history()
-        await self.send(format_weekly_summary(trades))
+        await self.send(format_weekly_summary(trades), quiet=True)
 
     async def send_drift_alert(self, event) -> None:
         from notifier.telegram import format_drift_alert
@@ -855,6 +861,7 @@ class TelegramNotifier:
 
     async def start(self) -> None:
         """Build and start the Telegram Application. Call once at bot startup."""
+        from telegram import BotCommand
         from telegram.ext import Application, CallbackQueryHandler, CommandHandler
         self._app = Application.builder().token(self._token).build()
         self._app.add_handler(CommandHandler("start", self.cmd_help))
@@ -884,6 +891,16 @@ class TelegramNotifier:
         await self._app.initialize()
         await self._app.updater.start_polling()
         await self._app.start()
+        await self._app.bot.set_my_commands([
+            BotCommand("status", "Bot + positions status"),
+            BotCommand("pnl", "Profit & loss"),
+            BotCommand("open_positions", "Open positions"),
+            BotCommand("close", "Close a position (symbol [LONG|SHORT])"),
+            BotCommand("flatten", "Close ALL positions (panic)"),
+            BotCommand("pause", "Pause new orders"),
+            BotCommand("resume", "Resume trading"),
+            BotCommand("help", "List commands"),
+        ])
         interval = float(os.getenv("TELEGRAM_HEALTH_CHECK_SECONDS", "60"))
         if interval > 0:
             self._health_monitor = TelegramConnectivityMonitor(
